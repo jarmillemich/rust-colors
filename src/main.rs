@@ -1,8 +1,8 @@
 #![feature(box_syntax)]
 
-use std::{rc::Rc, time::Instant};
+use std::{time::Instant};
 
-use rust_colors::{points, bounding_box, color_generator::ColorGenerator};
+use rust_colors::{color_generator::ColorGenerator};
 
 
 fn main() {

@@ -1,31 +1,28 @@
 use std::cell::RefCell;
-use std::collections::HashSet;
 use std::time::Instant;
 use std::{path::Path, rc::Rc};
 use std::fs::File;
 use std::io::BufWriter;
-use rand::Rng;
-use rand::seq::SliceRandom;
 use crate::points::Point;
 use crate::{points::{ColorPoint, SpacePoint}, octree::Octree, bounding_box::BoundingBox};
 
 type ImageType = Box<[u8; 4096*4096*4]>;
-type SpacePoints = Box<[SpacePoint; 4096*4096]>;
+type SpacePoints = Box<[Rc<SpacePoint>; 4096*4096]>;
 
-pub struct ColorGenerator<'a> {
+pub struct ColorGenerator {
   colors: Vec<Rc<ColorPoint>>,
   //color_space: [&'a ColorPoint; 4096*4096],
   spaces: SpacePoints,
   written_spaces: Box<[bool; 4096*4096]>,
-  root: Rc<Octree<'a>>,
+  root: Rc<Octree>,
   //image: Vec<u8>,
   image: ImageType,
   current_color_idx: RefCell<usize>,
 }
 
 // Public things
-impl<'a> ColorGenerator<'a> {
-  pub fn new() -> Box<ColorGenerator<'a>> {
+impl ColorGenerator {
+  pub fn new() -> Box<ColorGenerator> {
     let colors = initialize_color_space();
     // let mut image = Vec::with_capacity(4096*4096*4);
     // for i in 0..4096*4096*4 { image.push(0); }
@@ -68,7 +65,7 @@ impl<'a> ColorGenerator<'a> {
       } else {
         let new_point: Rc<Point> = Rc::new(Point {
           color: Rc::clone(color),
-          space: &self.spaces[neighbor]
+          space: Rc::clone(&self.spaces[neighbor])
         });
 
 
@@ -78,9 +75,9 @@ impl<'a> ColorGenerator<'a> {
     
   }
 
-  pub fn add_specific_seed_pixel(&self, x: i32, y: i32, r: u8, g: u8, b: u8) {
-    todo!("Add specific seed pizels");
-  }
+  // pub fn add_specific_seed_pixel(&self, x: i32, y: i32, r: u8, g: u8, b: u8) {
+  //   todo!("Add specific seed pizels");
+  // }
 
   pub fn grow_pixels_to(&mut self, pixel_count: usize) {
     
@@ -141,7 +138,7 @@ fn initialize_color_space() -> Vec<Rc<ColorPoint>> {
   for r in 0..=255u8 {
     for g in 0..=255u8 {
       for b in 0..=255u8 {
-        let idx = usize::from(r) << 16 | usize::from(g) << 8 | usize::from(b);
+        //let idx = usize::from(r) << 16 | usize::from(g) << 8 | usize::from(b);
         //self.color_space[idx] = &self.colors[idx];
 
         colors.push(Rc::new(ColorPoint { r, g, b }));
@@ -172,7 +169,7 @@ fn initialize_space_space() -> SpacePoints {
 
   println!("  Init spaces in {}", now.elapsed().as_millis());
 
-  spaces
+  box spaces.map(|s| Rc::new(s))
 }
 
 // Helpers

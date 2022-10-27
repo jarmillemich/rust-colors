@@ -1,23 +1,23 @@
-use std::{collections::HashSet, cell::RefCell,rc::{Rc,Weak}, borrow::{BorrowMut, Borrow}, ops::DerefMut};
+use std::{collections::HashSet, cell::RefCell,rc::{Rc,Weak}, borrow::{BorrowMut, Borrow}};
 
 use crate::{points::{ColorPoint, Point}, bounding_box::BoundingBox};
 
 //type OctreeLink = RefCell<Octree>;
-type ParentLink<'a> = Option<Weak<Octree<'a>>>;
-type ChildLink<'a> = RefCell<Option<Rc<Octree<'a>>>>;
+type ParentLink = Option<Weak<Octree>>;
+type ChildLink = RefCell<Option<Rc<Octree>>>;
 
-pub struct Octree<'a> {
+pub struct Octree {
   depth: u8,
-  parent: ParentLink<'a>,
-  children: [ChildLink<'a>; 8],
+  parent: ParentLink,
+  children: [ChildLink; 8],
   bounds: BoundingBox,
-  points: RefCell<HashSet<Rc<Point<'a>>>>,
+  points: RefCell<HashSet<Rc<Point>>>,
   coord: usize,
-  ptr: RefCell<Weak<Octree<'a>>>,
+  ptr: RefCell<Weak<Octree>>,
 }
 
-struct Search<'a> {
-  canidate: Rc<Point<'a>>,
+struct Search {
+  canidate: Rc<Point>,
   source: Rc<ColorPoint>,
   best_distance_sq: i32,
   bounds: BoundingBox,
@@ -26,11 +26,11 @@ struct Search<'a> {
 static QUAD_TUNING: usize = 64;
 static TREE_TUNING_DEPTH: u8 = 4;
 
-impl<'a> Octree<'a> {
+impl Octree {
   pub fn new(
-    parent: ParentLink<'a>, depth: u8, coord: usize,
+    parent: ParentLink, depth: u8, coord: usize,
     bounds: BoundingBox
-  ) -> Rc<Octree<'a>> {
+  ) -> Rc<Octree> {
     let ret = Rc::new(Octree {
       depth,
       // TODO why can't we use the quick array literal here?
@@ -62,11 +62,11 @@ impl<'a> Octree<'a> {
     }
 
     // Add to this node
-    let someClone = Rc::clone(&point);
-    self.points.borrow_mut().insert(someClone);
+    let some_clone = Rc::clone(&point);
+    self.points.borrow_mut().insert(some_clone);
   }
 
-  pub fn remove(&self, point: &Rc<Point<'a>>) {
+  pub fn remove(&self, point: &Rc<Point>) {
     if !self.points.borrow().contains(point) {
       panic!("Removing non-existent point {point}");
     }
@@ -83,7 +83,7 @@ impl<'a> Octree<'a> {
     self.points.borrow_mut().remove(point);
   }
 
-  fn get_or_create_child(&self, color: &Rc<ColorPoint>) -> RefCell<Rc<Octree<'a>>> {
+  fn get_or_create_child(&self, color: &Rc<ColorPoint>) -> RefCell<Rc<Octree>> {
     assert!(self.depth < TREE_TUNING_DEPTH, "Should not create a child past the tuning depth");
     
     let caddr = self.addr(color);
@@ -119,7 +119,7 @@ impl<'a> Octree<'a> {
     thing.as_ref().borrow_mut().get_or_create_child(color)
   }
 
-  fn get_child(&self, color: &Rc<ColorPoint>) -> Option<Rc<Octree<'a>>> {
+  fn get_child(&self, color: &Rc<ColorPoint>) -> Option<Rc<Octree>> {
     match self.children[self.addr(color)].borrow().as_ref() {
       Some(c) => Some(Rc::clone(&c)),
       None => None
@@ -141,7 +141,7 @@ impl<'a> Octree<'a> {
     usize::from(raddr << 2 | gaddr << 1 | baddr)
   }
 
-  pub fn find_nearest(&self, color: &Rc<ColorPoint>) -> Option<Rc<Point<'a>>> {
+  pub fn find_nearest(&self, color: &Rc<ColorPoint>) -> Option<Rc<Point>> {
     let child = self.get_child(color);
 
     if self.points.borrow().is_empty() {
@@ -189,7 +189,7 @@ impl<'a> Octree<'a> {
     }
   }
 
-  fn nearest_in_self(&self, color: &Rc<ColorPoint>) -> Rc<Point<'a>> {
+  fn nearest_in_self(&self, color: &Rc<ColorPoint>) -> Rc<Point> {
     let points = self.points.borrow();
     let result = points.iter()
       .map(|p| (p, p.color.distance_to(color)))
@@ -198,7 +198,7 @@ impl<'a> Octree<'a> {
     Rc::clone(result.expect("Should have had at least one point for nearest_in_self").0)
   }
 
-  fn nn_search_up(&self, mut search: Search<'a>, from: Rc<Octree<'a>>) -> Search<'a> {
+  fn nn_search_up(&self, mut search: Search, from: Rc<Octree>) -> Search {
     assert!(search.bounds.intersects(&self.bounds), "Searching up a non-intersecting tree");
 
     // Search all the children we didn't come from
@@ -229,7 +229,7 @@ impl<'a> Octree<'a> {
     search
   }
 
-  fn nn_search_down(&self, mut search: Search<'a>) -> Search<'a> {
+  fn nn_search_down(&self, mut search: Search) -> Search {
     // Skip us if not in search space
     if !search.bounds.intersects(&self.bounds) { return search; }
 

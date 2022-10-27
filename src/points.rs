@@ -1,10 +1,13 @@
-use std::fmt;
+use std::{fmt, rc::Rc};
 
-#[derive(Clone, Copy, Debug, Hash, Eq, PartialEq)]
+#[derive(Clone, Debug, Hash, Eq, PartialEq)]
 pub struct SpacePoint {
     pub x: u32,
     pub y: u32,
-    //pub written: bool,
+}
+
+fn space_offset(x: u32, y: u32) -> usize {
+    (y << 12 | x) as usize
 }
 
 impl SpacePoint {
@@ -14,8 +17,20 @@ impl SpacePoint {
         SpacePoint {
             x,
             y,
-            //written: false,
+            //written: RefCell::new(false),
         }
+    }
+
+    pub fn get_neighbors(&self) -> Vec<usize> {
+        // Yikes
+        let mut ret = Vec::with_capacity(4);
+
+        if self.x > 0    { ret.push(space_offset(self.x - 1, self.y)); }
+        if self.x < 4095 { ret.push(space_offset(self.x + 1, self.y)); }
+        if self.y > 0    { ret.push(space_offset(self.x, self.y - 1)); }
+        if self.y < 4095 { ret.push(space_offset(self.x, self.y + 1)); }
+
+        ret
     }
 }
 
@@ -37,7 +52,7 @@ impl ColorPoint {
         ColorPoint { r: 0, g: 0, b: 0 }
     }
 
-    pub fn distance_to(&self, other: &ColorPoint) -> i32 {
+    pub fn distance_to(&self, other: &Rc<ColorPoint>) -> i32 {
         let dr: i32 = i32::from(self.r) - i32::from(other.r);
         let dg: i32 = i32::from(self.g) - i32::from(other.g);
         let db: i32 = i32::from(self.b) - i32::from(other.b);
@@ -53,14 +68,14 @@ impl fmt::Display for ColorPoint {
 }
 
 #[derive(Hash, Eq, PartialEq)]
-pub struct Point {
-    pub space: SpacePoint,
-    pub color: ColorPoint,
-    pub idx: i32,
+pub struct Point<'a> {
+    pub space: &'a SpacePoint,//Rc<SpacePoint>,
+    pub color: Rc<ColorPoint>,
+    //pub idx: i32,
 }
 
 
-impl fmt::Display for Point {
+impl<'a> fmt::Display for Point<'a> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(f, "Point<{},{} # {},{},{}>",
             self.space.x, self.space.y,

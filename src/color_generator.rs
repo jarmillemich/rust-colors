@@ -1,30 +1,43 @@
-use std::path::Path;
+use std::cell::RefCell;
+use std::collections::HashSet;
+use std::time::Instant;
+use std::{path::Path, rc::Rc};
 use std::fs::File;
 use std::io::BufWriter;
 use rand::Rng;
+use rand::seq::SliceRandom;
+use crate::points::Point;
 use crate::{points::{ColorPoint, SpacePoint}, octree::Octree, bounding_box::BoundingBox};
 
+type ImageType = Box<[u8; 4096*4096*4]>;
+type SpacePoints = Box<[SpacePoint; 4096*4096]>;
+
 pub struct ColorGenerator<'a> {
-  colors: [ColorPoint; 4096*4096],
+  colors: Vec<Rc<ColorPoint>>,
   //color_space: [&'a ColorPoint; 4096*4096],
-  spaces: [SpacePoint; 4096*4096],
-  root: Octree<'a>,
-  image: [u8; 4096*4096*4],
-  current_color_idx: usize,
+  spaces: SpacePoints,
+  written_spaces: Box<[bool; 4096*4096]>,
+  root: Rc<Octree<'a>>,
+  //image: Vec<u8>,
+  image: ImageType,
+  current_color_idx: RefCell<usize>,
 }
 
 // Public things
 impl<'a> ColorGenerator<'a> {
-  pub fn new() -> ColorGenerator<'a> {
+  pub fn new() -> Box<ColorGenerator<'a>> {
     let colors = initialize_color_space();
+    // let mut image = Vec::with_capacity(4096*4096*4);
+    // for i in 0..4096*4096*4 { image.push(0); }
     
-    let ret = ColorGenerator {
+    let ret = box ColorGenerator {
       colors,
       spaces: initialize_space_space(),
-      current_color_idx: 0,
-      image: [0u8; 4096*4096*4],
+      current_color_idx: RefCell::new(0),
+      image: box [0; 4096*4096*4],
+      written_spaces: box [false; 4096*4096],
       root: Octree::new(None, 0, 0, BoundingBox::new(0, 0, 0, 256, 256, 256)),
-      //color_space: colors.iter().enumerate().map(|(i, _)| &colors[i]).collect::<Vec<&'a ColorPoint>>().try_into().unwrap()
+      //color_space: colors.iter().enumerate().map(|(i, _)| &colors[i]).collect::<Vec<&'a ColorPoint>>().try_into().unwrap(),
     };
 
     ret
@@ -32,39 +45,60 @@ impl<'a> ColorGenerator<'a> {
 
   pub fn shuffle_colors(&mut self) {
     println!("Doing the color shuffle");
-    let mut rng = rand::thread_rng();
-
-    for i in 0..4096*4096-1 {
-      let j = rng.gen_range(i..4096*4096);
-      self.colors.swap(i, j);
-    }
+    //let mut rng = rand::thread_rng();
+    //self.colors.shuffle(&mut rng);
+    fastrand::shuffle(&mut self.colors);
+    
   }
 
-  pub fn add_next_seed_pixel(&self, x: i32, y: i32) {
+  pub fn add_next_seed_pixel(&self, x: u32, y: u32) {
+    let color = &self.colors[self.current_color_idx.borrow().to_owned()];
+    *self.current_color_idx.borrow_mut() += 1;
+    let ofs = space_offset(x, y);
 
+    if self.written_spaces[ofs] {
+      panic!("Seeded already written point");
+    }
+
+    let space = &self.spaces[ofs];
+
+    for neighbor in space.get_neighbors() {
+      if self.written_spaces[neighbor] {
+        continue;
+      } else {
+        let new_point: Rc<Point> = Rc::new(Point {
+          color: Rc::clone(color),
+          space: &self.spaces[neighbor]
+        });
+
+
+        self.root.add(new_point);
+      }
+    }
+    
   }
 
   pub fn add_specific_seed_pixel(&self, x: i32, y: i32, r: u8, g: u8, b: u8) {
-
+    todo!("Add specific seed pizels");
   }
 
   pub fn grow_pixels_to(&mut self, pixel_count: usize) {
     
-    if self.current_color_idx == 0 {
+    if self.current_color_idx.borrow().to_owned() == 0 {
       panic!("Tried to call grow_pixels_to without any seed pixels");
     }
     
-    for i in self.current_color_idx..pixel_count {
+    for i in self.current_color_idx.borrow().to_owned()..pixel_count {
       println!("Adding pixel {i}");
 
       let at = &self.colors[i];
-      let next = self.root.find_nearest(at).expect("Tried to add a pixel but there were none to grow on");
+      let next = self.root.find_nearest(&at).expect("Tried to add a pixel but there were none to grow on");
 
-      Self::place_pixel(&mut self.image, &next.space, at);
+      Self::place_pixel(&mut self.image, &next.space, &at);
     }
   }
 
-  pub fn place_pixel(image: &mut [u8; 4096*4096*4], space: &SpacePoint, color: &ColorPoint) {
+  pub fn place_pixel(image: &mut ImageType, space: &SpacePoint, color: &ColorPoint) {
     let idx = space_offset(space.x, space.y) * 4;
     
     image[idx + 0] = color.r;
@@ -93,7 +127,7 @@ impl<'a> ColorGenerator<'a> {
     encoder.set_source_chromaticities(source_chromaticities);
     let mut writer = encoder.write_header().unwrap();
 
-    writer.write_image_data(&self.image).unwrap(); // Save
+    writer.write_image_data(self.image.as_ref()).unwrap(); // Save
   }
 }
 
@@ -101,8 +135,8 @@ impl<'a> ColorGenerator<'a> {
 
 
 /// Sets up our list of colors and color pointers
-fn initialize_color_space() -> [ColorPoint; 4096*4096] {
-  let mut colors = [ColorPoint { r: 0, g: 0, b: 0}; 4096*4096];
+fn initialize_color_space() -> Vec<Rc<ColorPoint>> {
+  let mut colors = Vec::with_capacity(4096 * 4096);
   
   for r in 0..=255u8 {
     for g in 0..=255u8 {
@@ -110,9 +144,7 @@ fn initialize_color_space() -> [ColorPoint; 4096*4096] {
         let idx = usize::from(r) << 16 | usize::from(g) << 8 | usize::from(b);
         //self.color_space[idx] = &self.colors[idx];
 
-        colors[idx].r = r;
-        colors[idx].g = g;
-        colors[idx].b = b;
+        colors.push(Rc::new(ColorPoint { r, g, b }));
       }
     }
   }
@@ -121,19 +153,24 @@ fn initialize_color_space() -> [ColorPoint; 4096*4096] {
 }
 
 /// Sets up our list of points
-fn initialize_space_space() -> [SpacePoint; 4096*4096] {
-  let mut spaces = [SpacePoint::zero(); 4096*4096];
+fn initialize_space_space() -> SpacePoints {
+  let now = Instant::now();
   
-  for x in 0..4096 {
-    for y in 0..4096 {
+  const ZERO: SpacePoint = SpacePoint { x: 0, y: 0 };
+  let mut spaces = box [ZERO; 4096*4096];
+
+  println!("  Alloc spaces in {}", now.elapsed().as_millis());
+
+  for x in 0..4096u32 {
+    for y in 0..4096u32 {
       let mut point = &mut spaces[space_offset(x, y)];
 
       point.x = x;
       point.y = y;
-      // TODO what was this for?
-      //point.hash = space_offset(x, y);
     }
   }
+
+  println!("  Init spaces in {}", now.elapsed().as_millis());
 
   spaces
 }

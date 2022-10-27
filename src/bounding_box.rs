@@ -43,7 +43,7 @@ impl BoundingBox {
 
     /// Constructs a BoundingBox around the given center with the given radius
     pub fn from_around(center: &points::ColorPoint, radius: i32) -> BoundingBox {
-        let bb = BoundingBox::new(0, 0, 0, 0, 0, 0);
+        let mut bb = BoundingBox::new(0, 0, 0, 0, 0, 0);
         bb.set_around(center, radius);
         bb
     }

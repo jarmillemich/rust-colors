@@ -1,4 +1,4 @@
-use std::{collections::HashSet, cell::RefCell,rc::{Rc,Weak}, borrow::{BorrowMut, Borrow}};
+use std::{collections::{HashSet, HashMap}, cell::RefCell,rc::{Rc,Weak}, borrow::{BorrowMut, Borrow}};
 
 use crate::{points::{ColorPoint, Point}, bounding_box::BoundingBox};
 
@@ -11,6 +11,7 @@ pub struct Octree {
   parent: ParentLink,
   children: [ChildLink; 8],
   bounds: BoundingBox,
+  point_lookup: RefCell<HashMap<usize, RefCell<Vec<Rc<Point>>>>>,
   points: RefCell<HashSet<Rc<Point>>>,
   coord: usize,
   ptr: RefCell<Weak<Octree>>,
@@ -38,6 +39,7 @@ impl Octree {
       children: array_init::array_init(|_| RefCell::new(None)),
       parent,
       bounds,
+      point_lookup: RefCell::new(HashMap::new()),
       points: RefCell::new(HashSet::new()),
       coord,
       ptr: RefCell::new(Weak::new()),
@@ -49,14 +51,14 @@ impl Octree {
   }
 
   //pub fn diameter(&self) -> u8 { 256 >> self.depth }
-  pub fn radius(&self) -> u8 { 128 >> self.depth }
+  pub fn radius(&self) -> i32 { 128 >> self.depth }
 
   pub fn add(&self, point: Rc<Point>) {
-    
+    //println!("    Add {point} at {}", self.depth);
     
     if self.depth < TREE_TUNING_DEPTH {
       // Head downwards
-      let child = self.get_or_create_child(&point.color);
+      let mut child = self.get_or_create_child(&point.color);
       let child = child.borrow_mut();
       child.add(Rc::clone(&point));
     }
@@ -64,6 +66,12 @@ impl Octree {
     // Add to this node
     let some_clone = Rc::clone(&point);
     self.points.borrow_mut().insert(some_clone);
+
+    let mut hm = self.point_lookup.borrow_mut();
+    if !hm.contains_key(&point.space) {
+      hm.insert(point.space, RefCell::new(Vec::new()));
+    }
+    hm.get(&point.space).expect("The thing we just added should be there").borrow_mut().push(Rc::clone(&point));
   }
 
   pub fn remove(&self, point: &Rc<Point>) {
@@ -71,23 +79,54 @@ impl Octree {
       panic!("Removing non-existent point {point}");
     }
 
-    // Remove from children
-    if self.depth < TREE_TUNING_DEPTH {
-      match self.children[self.addr(&point.color)].borrow().as_ref() {
-        Some(child) => child.remove(point),
-        None => panic!("Tried to remove from a non-existant child node")
+    // NB we are removing by the spatial component here
+    // Grab all our Rcs to remove
+    let pts = {
+      let mut hm = self.point_lookup.borrow_mut();
+
+      // End of the line
+      if !hm.contains_key(&point.space) { return; }
+
+      hm.remove(&point.space).expect("Thing we just checked should be there")
+    };
+
+    //println!("    Removing {} instances of color {}", pts.borrow().len(), &point.color);
+
+    for rc in pts.borrow().iter() {
+      // Remove from self
+      self.remove_spec(&rc);
+      
+      // Remove from children
+      for child in &self.children {
+        match child.borrow().as_ref() {
+          Some(c) => c.remove_spec(&rc),
+          None => {}
+        };
       }
     }
 
-    // Remove from self
-    self.points.borrow_mut().remove(point);
   }
 
-  fn get_or_create_child(&self, color: &Rc<ColorPoint>) -> RefCell<Rc<Octree>> {
-    assert!(self.depth < TREE_TUNING_DEPTH, "Should not create a child past the tuning depth");
+  // Like remove but we already have all the color/space info
+  fn remove_spec(&self, point: &Rc<Point>) {
+    //println!("    Removed {point} at {}", self.depth);
+    self.points.borrow_mut().remove(point);
+    self.point_lookup.borrow_mut().remove(&point.space);
+
+    // Remove from children
+    for child in &self.children {
+      match child.borrow().as_ref() {
+        Some(c) => c.remove_spec(&point),
+        None => {}
+      };
+    }
+  }
+
+  fn get_or_create_child(&self, color: &Rc<ColorPoint>) -> Rc<Octree> {
+    assert!(self.depth <= TREE_TUNING_DEPTH, "Should not create a child past the tuning depth");
     
     let caddr = self.addr(color);
-    let radius = i32::from(self.radius());
+    let radius = self.radius();
 
     let mut child = self.children[caddr].borrow_mut();
 
@@ -116,7 +155,7 @@ impl Octree {
     
     //self.get_or_create_child_inner(color, &mut self.children[caddr]);
     let thing = child.as_ref().expect("Just created a child, it should exist");
-    thing.as_ref().borrow_mut().get_or_create_child(color)
+    Rc::clone(thing)
   }
 
   fn get_child(&self, color: &Rc<ColorPoint>) -> Option<Rc<Octree>> {
@@ -134,11 +173,11 @@ impl Octree {
     let mask = self.radius();
     let over = 7 - self.depth;
 
-    let raddr = (color.r & mask) >> over;
-    let gaddr = (color.g & mask) >> over;
-    let baddr = (color.b & mask) >> over;
+    let raddr = (color.r as i32 & mask) >> over;
+    let gaddr = (color.g as i32 & mask) >> over;
+    let baddr = (color.b as i32 & mask) >> over;
 
-    usize::from(raddr << 2 | gaddr << 1 | baddr)
+    (raddr << 2 | gaddr << 1 | baddr) as usize
   }
 
   pub fn find_nearest(&self, color: &Rc<ColorPoint>) -> Option<Rc<Point>> {
@@ -258,5 +297,9 @@ impl Octree {
     }
 
     search
+  }
+
+  pub fn len(&self) -> usize {
+    self.points.borrow().len()
   }
 }

@@ -7,7 +7,7 @@ use crate::points::Point;
 use crate::{points::{ColorPoint, SpacePoint}, octree::Octree, bounding_box::BoundingBox};
 
 type ImageType = Box<[u8; 4096*4096*4]>;
-type SpacePoints = Box<[Rc<SpacePoint>; 4096*4096]>;
+type SpacePoints = Box<[SpacePoint; 4096*4096]>;
 
 pub struct ColorGenerator {
   colors: Vec<Rc<ColorPoint>>,
@@ -48,7 +48,7 @@ impl ColorGenerator {
     
   }
 
-  pub fn add_next_seed_pixel(&self, x: u32, y: u32) {
+  pub fn add_next_seed_pixel(&mut self, x: u32, y: u32) {
     let color = &self.colors[self.current_color_idx.borrow().to_owned()];
     *self.current_color_idx.borrow_mut() += 1;
     let ofs = space_offset(x, y);
@@ -59,20 +59,28 @@ impl ColorGenerator {
 
     let space = &self.spaces[ofs];
 
+    Self::place_pixel(&mut self.image, space, color);
+
+    self.add_neighbors(&space, &color);
+
+    self.root.add(Rc::new(Point { color: Rc::clone(color), space: ofs }));
+    
+  }
+
+  fn add_neighbors(&self, space: &SpacePoint, color: &Rc<ColorPoint>) {
     for neighbor in space.get_neighbors() {
       if self.written_spaces[neighbor] {
         continue;
       } else {
         let new_point: Rc<Point> = Rc::new(Point {
           color: Rc::clone(color),
-          space: Rc::clone(&self.spaces[neighbor])
+          space: neighbor
         });
 
 
         self.root.add(new_point);
       }
     }
-    
   }
 
   // pub fn add_specific_seed_pixel(&self, x: i32, y: i32, r: u8, g: u8, b: u8) {
@@ -86,12 +94,22 @@ impl ColorGenerator {
     }
     
     for i in self.current_color_idx.borrow().to_owned()..pixel_count {
-      println!("Adding pixel {i}");
+      if i & 1023 == 0 { println!("Adding pixel {i}, wf = {}", self.root.len()); }
 
       let at = &self.colors[i];
       let next = self.root.find_nearest(&at).expect("Tried to add a pixel but there were none to grow on");
 
-      Self::place_pixel(&mut self.image, &next.space, &at);
+      let space = &self.spaces[next.space];
+
+      //println!("  It was {at} at {space}, wf={}", self.root.len());
+
+      Self::place_pixel(&mut self.image, &space, &at);
+
+      // Remove that one
+      self.root.remove(&next);
+
+      // Add new ones
+      self.add_neighbors(&space, &at);
     }
   }
 
@@ -169,7 +187,8 @@ fn initialize_space_space() -> SpacePoints {
 
   println!("  Init spaces in {}", now.elapsed().as_millis());
 
-  box spaces.map(|s| Rc::new(s))
+
+  spaces//.map(|s| Rc::new(s))
 }
 
 // Helpers

@@ -69,16 +69,16 @@ impl fmt::Display for ColorPoint {
 
 #[derive(Hash, Eq, PartialEq)]
 pub struct Point {
-    pub space: Rc<SpacePoint>,
+    pub space: usize,//Rc<SpacePoint>,
     pub color: Rc<ColorPoint>,
     //pub idx: i32,
 }
 
 
-impl<'a> fmt::Display for Point {
+impl fmt::Display for Point {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(f, "Point<{},{} # {},{},{}>",
-            self.space.x, self.space.y,
+            self.space, self.space,
             self.color.r, self.color.g, self.color.b
         )
     }

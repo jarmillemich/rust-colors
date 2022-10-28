@@ -23,13 +23,15 @@ fn main() {
     let elapsed = start.elapsed();
     println!("Add seed at {}", elapsed.as_millis());
 
+    
+
+    whatever.grow_pixels_to(4096*4096);
+    let elapsed = start.elapsed();
+    println!("Grown at {}", elapsed.as_millis());
+
     whatever.write_image(&String::from("./test.png"));
     let elapsed = start.elapsed();
     println!("Wrote at {}", elapsed.as_millis());
-
-    whatever.grow_pixels_to(1000);
-    let elapsed = start.elapsed();
-    println!("Grown at {}", elapsed.as_millis());
 
     println!("All done");
 }

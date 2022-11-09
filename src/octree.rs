@@ -1,4 +1,4 @@
-use std::{collections::{HashSet, HashMap}, cell::RefCell,rc::{Rc,Weak}, borrow::{BorrowMut, Borrow}};
+use std::{collections::{HashSet, HashMap}, cell::RefCell,rc::{Rc,Weak}, borrow::{Borrow}};
 
 use crate::{points::{ColorPoint, Point}, bounding_box::BoundingBox};
 
@@ -79,7 +79,7 @@ impl Octree {
 
     let point = point.space;
 
-    // NB we are removing by the spatial component here
+    // NB we are removing by the spatial component here, so get all the actual points with this
     // Grab all our Rcs to remove
     let pts = {
       let mut hm = self.point_lookup.borrow_mut();
@@ -110,12 +110,11 @@ impl Octree {
     self.point_lookup.borrow_mut().remove(&point.space);
 
     // Remove from children
-    for child in &self.children {
-      match child.borrow().as_ref() {
-        Some(c) => c.remove_spec(&point),
-        None => {}
-      };
-    }
+    match self.children[self.addr(&point.color)].borrow().as_ref() {
+      Some(child) => child.remove_spec(point),
+      None => {},
+    };
+
   }
 
   fn get_or_create_child(&self, color: &Rc<ColorPoint>) -> Rc<Octree> {

@@ -1,4 +1,3 @@
-use std::borrow::Borrow;
 use std::cell::RefCell;
 use std::mem;
 use std::time::Instant;
@@ -107,13 +106,13 @@ impl ColorGenerator {
     
     for i in self.current_color_idx.borrow().to_owned()..pixel_count {
       let mut start = Instant::now();
-      if i & 4095 == 0 {
+      if i & 262143 == 0 {
         // Progress
         let time_so_far = search_time + place_time + remove_time + add_time;
         let time_per_px = time_so_far as f64 / i as f64;
         let remaining = time_per_px * (4096 * 4096 - i) as f64;
 
-        println!("Adding pixel {i} ({:.1}%), wf = {}, s={}, p={}, r={}, add={}, ETA={:.2}s as {:.2} px/s",
+        println!("Adding pixel {i} ({:.1}%), wf = {}, s={}, p={}, r={}, add={}, ETA={:.2}/{:.2}s as {:.2} px/s",
           100.0 * (i as f64) / 4096.0 / 4096.0,
           self.root.len(),
           search_time / 1000,
@@ -121,6 +120,7 @@ impl ColorGenerator {
           remove_time / 1000,
           add_time / 1000,
           remaining / 1000.0 / 1000.0,
+          (remaining + time_so_far as f64) / 1000.0 / 1000.0,
           1000000.0 / time_per_px
         );
 

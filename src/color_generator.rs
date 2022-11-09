@@ -1,10 +1,13 @@
+use std::borrow::Borrow;
 use std::cell::RefCell;
+use std::mem;
 use std::time::Instant;
 use std::{path::Path, rc::Rc};
 use std::fs::File;
 use std::io::BufWriter;
 use crate::points::Point;
 use crate::{points::{ColorPoint, SpacePoint}, octree::Octree, bounding_box::BoundingBox};
+use bitvec::prelude::*;
 
 type ImageType = Box<[u8; 4096*4096*4]>;
 type SpacePoints = Box<[SpacePoint; 4096*4096]>;
@@ -13,7 +16,7 @@ pub struct ColorGenerator {
   colors: Vec<Rc<ColorPoint>>,
   //color_space: [&'a ColorPoint; 4096*4096],
   spaces: SpacePoints,
-  written_spaces: Box<[bool; 4096*4096]>,
+  written_spaces: RefCell<Box<BitArr!(for 4096*4096)>>,
   root: Rc<Octree>,
   //image: Vec<u8>,
   image: ImageType,
@@ -32,10 +35,14 @@ impl ColorGenerator {
       spaces: initialize_space_space(),
       current_color_idx: RefCell::new(0),
       image: box [0; 4096*4096*4],
-      written_spaces: box [false; 4096*4096],
+      written_spaces: RefCell::new(box bitarr![usize, Lsb0; 0; 4096*4096]),
       root: Octree::new(None, 0, 0, BoundingBox::new(0, 0, 0, 256, 256, 256)),
       //color_space: colors.iter().enumerate().map(|(i, _)| &colors[i]).collect::<Vec<&'a ColorPoint>>().try_into().unwrap(),
     };
+
+    println!("Stuff is {}", mem::size_of_val(&*ret));
+    println!("written is {}", mem::size_of_val(&*ret.written_spaces.borrow()));
+    println!("Colors is {} => {}M", mem::size_of::<ColorPoint>(), mem::size_of::<ColorPoint>() * 4096 * 4096 / 1024 / 1024);
 
     ret
   }
@@ -53,7 +60,7 @@ impl ColorGenerator {
     *self.current_color_idx.borrow_mut() += 1;
     let ofs = space_offset(x, y);
 
-    if self.written_spaces[ofs] {
+    if self.written_spaces.borrow_mut()[ofs] {
       panic!("Seeded already written point");
     }
 
@@ -69,7 +76,7 @@ impl ColorGenerator {
 
   fn add_neighbors(&self, space: &SpacePoint, color: &Rc<ColorPoint>) {
     for neighbor in space.get_neighbors() {
-      if self.written_spaces[neighbor] {
+      if self.written_spaces.borrow()[neighbor] {
         continue;
       } else {
         let new_point: Rc<Point> = Rc::new(Point {
@@ -92,24 +99,62 @@ impl ColorGenerator {
     if self.current_color_idx.borrow().to_owned() == 0 {
       panic!("Tried to call grow_pixels_to without any seed pixels");
     }
+
+    let mut search_time = 0;
+    let mut place_time = 0;
+    let mut remove_time = 0;
+    let mut add_time = 0;
     
     for i in self.current_color_idx.borrow().to_owned()..pixel_count {
-      if i & 1023 == 0 { println!("Adding pixel {i}, wf = {}", self.root.len()); }
+      let mut start = Instant::now();
+      if i & 4095 == 0 {
+        // Progress
+        let time_so_far = search_time + place_time + remove_time + add_time;
+        let time_per_px = time_so_far as f64 / i as f64;
+        let remaining = time_per_px * (4096 * 4096 - i) as f64;
 
+        println!("Adding pixel {i} ({:.1}%), wf = {}, s={}, p={}, r={}, add={}, ETA={:.2}s as {:.2} px/s",
+          100.0 * (i as f64) / 4096.0 / 4096.0,
+          self.root.len(),
+          search_time / 1000,
+          place_time / 1000,
+          remove_time / 1000,
+          add_time / 1000,
+          remaining / 1000.0 / 1000.0,
+          1000000.0 / time_per_px
+        );
+
+        
+      }
+      
       let at = &self.colors[i];
       let next = self.root.find_nearest(&at).expect("Tried to add a pixel but there were none to grow on");
 
+      search_time += start.elapsed().as_micros();
+      start = Instant::now();
+
       let space = &self.spaces[next.space];
+
+      // Mark done
+      self.written_spaces.borrow_mut().set(space_offset(space.x, space.y), true);
 
       //println!("  It was {at} at {space}, wf={}", self.root.len());
 
       Self::place_pixel(&mut self.image, &space, &at);
 
+      place_time += start.elapsed().as_micros();
+      start = Instant::now();
+
       // Remove that one
       self.root.remove(&next);
 
+      remove_time += start.elapsed().as_micros();
+      start = Instant::now();
+
       // Add new ones
       self.add_neighbors(&space, &at);
+
+      add_time += start.elapsed().as_micros();
     }
   }
 

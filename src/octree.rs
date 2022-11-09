@@ -58,20 +58,18 @@ impl Octree {
     
     if self.depth < TREE_TUNING_DEPTH {
       // Head downwards
-      let mut child = self.get_or_create_child(&point.color);
-      let child = child.borrow_mut();
-      child.add(Rc::clone(&point));
+      self.get_or_create_child(&point.color).add(Rc::clone(&point));
     }
 
-    // Add to this node
-    let some_clone = Rc::clone(&point);
-    self.points.borrow_mut().insert(some_clone);
-
+    // Add to the lookup helper on this node
     let mut hm = self.point_lookup.borrow_mut();
     if !hm.contains_key(&point.space) {
       hm.insert(point.space, RefCell::new(Vec::new()));
     }
     hm.get(&point.space).expect("The thing we just added should be there").borrow_mut().push(Rc::clone(&point));
+
+    // Add to this node
+    self.points.borrow_mut().insert(point);
   }
 
   pub fn remove(&self, point: &Rc<Point>) {
@@ -79,36 +77,34 @@ impl Octree {
       panic!("Removing non-existent point {point}");
     }
 
+    let point = point.space;
+
     // NB we are removing by the spatial component here
     // Grab all our Rcs to remove
     let pts = {
       let mut hm = self.point_lookup.borrow_mut();
 
       // End of the line
-      if !hm.contains_key(&point.space) { return; }
+      if !hm.contains_key(&point) { return; }
 
-      hm.remove(&point.space).expect("Thing we just checked should be there")
+      hm.remove(&point).expect("Thing we just checked should be there")
     };
 
     //println!("    Removing {} instances of color {}", pts.borrow().len(), &point.color);
 
-    for rc in pts.borrow().iter() {
+    for rc in pts.into_inner() {
       // Remove from self
       self.remove_spec(&rc);
-      
-      // Remove from children
-      for child in &self.children {
-        match child.borrow().as_ref() {
-          Some(c) => c.remove_spec(&rc),
-          None => {}
-        };
-      }
     }
 
   }
 
   // Like remove but we already have all the color/space info
   fn remove_spec(&self, point: &Rc<Point>) {
+    if !self.points.borrow().contains(point) {
+      return;
+    }
+    
     //println!("    Removed {point} at {}", self.depth);
     self.points.borrow_mut().remove(point);
     self.point_lookup.borrow_mut().remove(&point.space);

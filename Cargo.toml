@@ -11,3 +11,5 @@ png = "0.17.6"
 array-init = "2.0.1"
 # Tried this for a faster shuffle, 1500 -> 900ms 
 fastrand = "1.8.0"
+# No native boolean vectors :(
+bitvec = "1.0.1"

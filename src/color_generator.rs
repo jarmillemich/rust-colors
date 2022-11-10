@@ -1,11 +1,9 @@
 use std::cell::RefCell;
-use std::mem;
 use std::time::Instant;
 use std::{path::Path, rc::Rc};
 use std::fs::File;
 use std::io::BufWriter;
-use crate::points::Point;
-use crate::{points::{ColorPoint, SpacePoint}, octree::Octree, bounding_box::BoundingBox};
+use crate::{points::{ColorPoint, SpacePoint, Point}, octree::Octree, bounding_box::BoundingBox};
 use bitvec::prelude::*;
 
 type ImageType = Box<[u8; 4096*4096*4]>;
@@ -13,11 +11,9 @@ type SpacePoints = Box<[SpacePoint; 4096*4096]>;
 
 pub struct ColorGenerator {
   colors: Vec<Rc<ColorPoint>>,
-  //color_space: [&'a ColorPoint; 4096*4096],
   spaces: SpacePoints,
   written_spaces: RefCell<Box<BitArr!(for 4096*4096)>>,
   root: Rc<Octree>,
-  //image: Vec<u8>,
   image: ImageType,
   current_color_idx: RefCell<usize>,
 }
@@ -25,25 +21,14 @@ pub struct ColorGenerator {
 // Public things
 impl ColorGenerator {
   pub fn new() -> Box<ColorGenerator> {
-    let colors = initialize_color_space();
-    // let mut image = Vec::with_capacity(4096*4096*4);
-    // for i in 0..4096*4096*4 { image.push(0); }
-    
-    let ret = box ColorGenerator {
-      colors,
+    box ColorGenerator {
+      colors: initialize_color_space(),
       spaces: initialize_space_space(),
       current_color_idx: RefCell::new(0),
       image: box [0; 4096*4096*4],
       written_spaces: RefCell::new(box bitarr![usize, Lsb0; 0; 4096*4096]),
       root: Octree::new(None, 0, 0, BoundingBox::new(0, 0, 0, 256, 256, 256)),
-      //color_space: colors.iter().enumerate().map(|(i, _)| &colors[i]).collect::<Vec<&'a ColorPoint>>().try_into().unwrap(),
-    };
-
-    println!("Stuff is {}", mem::size_of_val(&*ret));
-    println!("written is {}", mem::size_of_val(&*ret.written_spaces.borrow()));
-    println!("Colors is {} => {}M", mem::size_of::<ColorPoint>(), mem::size_of::<ColorPoint>() * 4096 * 4096 / 1024 / 1024);
-
-    ret
+    }
   }
 
   pub fn shuffle_colors(&mut self) {
@@ -112,7 +97,7 @@ impl ColorGenerator {
         let time_per_px = time_so_far as f64 / i as f64;
         let remaining = time_per_px * (4096 * 4096 - i) as f64;
 
-        println!("Adding pixel {i} ({:.1}%), wf = {}, s={}, p={}, r={}, add={}, ETA={:.2}/{:.2}s as {:.2} px/s",
+        println!("Adding pixel {i} ({:.1}%), wf = {}, s={}, p={}, r={}, add={}, ETA={:.2}/{:.2}s as {:.2} kpx/s",
           100.0 * (i as f64) / 4096.0 / 4096.0,
           self.root.len(),
           search_time / 1000,
@@ -121,7 +106,7 @@ impl ColorGenerator {
           add_time / 1000,
           remaining / 1000.0 / 1000.0,
           (remaining + time_so_far as f64) / 1000.0 / 1000.0,
-          1000000.0 / time_per_px
+          1000.0 / time_per_px
         );
 
         

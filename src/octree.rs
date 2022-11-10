@@ -25,7 +25,7 @@ struct Search {
 }
 
 static QUAD_TUNING: usize = 64;
-static TREE_TUNING_DEPTH: u8 = 4;
+static TREE_TUNING_DEPTH: u8 = 3;
 
 impl Octree {
   pub fn new(
@@ -109,7 +109,7 @@ impl Octree {
     self.points.borrow_mut().remove(point);
     self.point_lookup.borrow_mut().remove(&point.space);
 
-    // Remove from children
+    // Remove from appropriate child
     match self.children[self.addr(&point.color)].borrow().as_ref() {
       Some(child) => child.remove_spec(point),
       None => {},

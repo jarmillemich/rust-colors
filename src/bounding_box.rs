@@ -19,9 +19,9 @@ impl BoundingBox {
     }
 
     pub fn intersects(&self, other: &BoundingBox) -> bool {
-        !(self.ur < other.lr || other.ur < self.lr) &&
-        !(self.ug < other.lg || other.ug < self.lg) &&
-        !(self.ub < other.lb || other.ub < self.lb)
+        !(self.ur < other.lr || other.ur < self.lr ||
+          self.ug < other.lg || other.ug < self.lg ||
+          self.ub < other.lb || other.ub < self.lb)
     }
 
     pub fn contains(&self, other: &BoundingBox) -> bool {

@@ -62,11 +62,12 @@ impl Octree {
     }
 
     // Add to the lookup helper on this node
-    let mut hm = self.point_lookup.borrow_mut();
-    if !hm.contains_key(&point.space) {
-      hm.insert(point.space, RefCell::new(Vec::new()));
-    }
-    hm.get(&point.space).expect("The thing we just added should be there").borrow_mut().push(Rc::clone(&point));
+    self.point_lookup
+      .borrow_mut()
+      .entry(point.space)
+      .or_insert_with(|| RefCell::new(Vec::new()))
+      .borrow_mut()
+      .push(Rc::clone(&point));
 
     // Add to this node
     self.points.borrow_mut().insert(point);
@@ -77,43 +78,38 @@ impl Octree {
       panic!("Removing non-existent point {point}");
     }
 
-    let point = point.space;
-
     // NB we are removing by the spatial component here, so get all the actual points with this
     // Grab all our Rcs to remove
-    let pts = {
+    let pts_maybe = {
       let mut hm = self.point_lookup.borrow_mut();
 
-      // End of the line
-      if !hm.contains_key(&point) { return; }
-
-      hm.remove(&point).expect("Thing we just checked should be there")
+      hm.remove(&point.space)
     };
 
     //println!("    Removing {} instances of color {}", pts.borrow().len(), &point.color);
-
-    for rc in pts.into_inner() {
-      // Remove from self
-      self.remove_spec(&rc);
+    if let Some(pts) = pts_maybe {
+      for rc in pts.into_inner() {
+        // Remove from self
+        self.remove_spec(&rc);
+      }
     }
 
   }
 
   // Like remove but we already have all the color/space info
   fn remove_spec(&self, point: &Rc<Point>) {
-    if !self.points.borrow().contains(point) {
+    // Try to remove, if we didn't have it then we're done
+    if !self.points.borrow_mut().remove(point) {
       return;
     }
     
     //println!("    Removed {point} at {}", self.depth);
-    self.points.borrow_mut().remove(point);
     self.point_lookup.borrow_mut().remove(&point.space);
 
     // Remove from appropriate child
-    match self.children[self.addr(&point.color)].borrow().as_ref() {
-      Some(child) => child.remove_spec(point),
-      None => {},
-    };
+    if let Some(child) = self.children[self.addr(&point.color)].borrow().as_ref() {
+      child.remove_spec(point)
+    }
 
   }
 
@@ -154,15 +150,11 @@ impl Octree {
   }
 
   fn get_child(&self, color: &Rc<ColorPoint>) -> Option<Rc<Octree>> {
-    match self.children[self.addr(color)].borrow().as_ref() {
-      Some(c) => Some(Rc::clone(&c)),
-      None => None
-    }
+    self.children[self.addr(color)]
+      .borrow()
+      .as_ref()
+      .map(Rc::clone)
   }
-  
-  // fn get_child_mut(&'a mut self, color: &'a ColorPoint) -> Option<&mut Box<Octree>> {
-  //   self.children[self.addr(color)]?.borrow_mut()
-  // }
 
   fn addr(&self, color: &Rc<ColorPoint>) -> usize {
     let mask = self.radius();
@@ -194,7 +186,7 @@ impl Octree {
       let distance = ret.color.distance_to(color);
       let radius_sq = self.radius() * self.radius();
 
-      if self.depth > 0 && distance > radius_sq as i32 {
+      if self.depth > 0 && distance > radius_sq {
         // The distance to the nearest candidate is bigger than our own radius
         // Therefore, we need to search our neighbors too
         let search_radius = f64::from(distance).sqrt().floor() as i32;
@@ -217,9 +209,9 @@ impl Octree {
         return Some(Rc::clone(&search.canidate));
       }
 
-      return Some(ret);
+      Some(ret)
     } else {
-      return child?.as_ref().borrow().find_nearest(color);
+      child?.as_ref().borrow().find_nearest(color)
     }
   }
 
@@ -283,11 +275,11 @@ impl Octree {
       }
     } else if self.depth < TREE_TUNING_DEPTH {
       // Keep going down!
+      
       for child in &self.children {
-        match child.borrow().as_ref() {
-          Some(c) => { search = c.nn_search_down(search) },
-          None => {}
-        };
+        if let Some(c) = child.borrow().as_ref() {
+          search = c.nn_search_down(search);
+        }
       }
     }
 
@@ -296,5 +288,9 @@ impl Octree {
 
   pub fn len(&self) -> usize {
     self.points.borrow().len()
+  }
+
+  pub fn is_empty(&self) -> bool {
+    self.points.borrow().is_empty()
   }
 }

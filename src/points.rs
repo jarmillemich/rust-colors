@@ -47,6 +47,12 @@ pub struct ColorPoint {
     pub b: u8,
 }
 
+impl Default for ColorPoint {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl ColorPoint {
     pub fn new() -> ColorPoint {
         ColorPoint { r: 0, g: 0, b: 0 }

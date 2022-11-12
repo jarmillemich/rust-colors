@@ -52,7 +52,7 @@ impl ColorGenerator {
 
     Self::place_pixel(&mut self.image, space, color);
 
-    self.add_neighbors(&space, &color);
+    self.add_neighbors(space, color);
 
     self.root.add(Rc::new(Point { color: Rc::clone(color), space: ofs }));
     
@@ -113,7 +113,7 @@ impl ColorGenerator {
       }
       
       let at = &self.colors[i];
-      let next = self.root.find_nearest(&at).expect("Tried to add a pixel but there were none to grow on");
+      let next = self.root.find_nearest(at).expect("Tried to add a pixel but there were none to grow on");
 
       search_time += start.elapsed().as_micros();
       start = Instant::now();
@@ -125,7 +125,7 @@ impl ColorGenerator {
 
       //println!("  It was {at} at {space}, wf={}", self.root.len());
 
-      Self::place_pixel(&mut self.image, &space, &at);
+      Self::place_pixel(&mut self.image, space, at);
 
       place_time += start.elapsed().as_micros();
       start = Instant::now();
@@ -137,7 +137,7 @@ impl ColorGenerator {
       start = Instant::now();
 
       // Add new ones
-      self.add_neighbors(&space, &at);
+      self.add_neighbors(space, at);
 
       add_time += start.elapsed().as_micros();
     }
@@ -146,7 +146,7 @@ impl ColorGenerator {
   pub fn place_pixel(image: &mut ImageType, space: &SpacePoint, color: &ColorPoint) {
     let idx = space_offset(space.x, space.y) * 4;
     
-    image[idx + 0] = color.r;
+    image[idx    ] = color.r;
     image[idx + 1] = color.g;
     image[idx + 2] = color.b;
     image[idx + 3] = 255;
@@ -155,7 +155,7 @@ impl ColorGenerator {
   pub fn write_image(&self, path_spec: &String) {
     let path = Path::new(path_spec);
     let file = File::create(path).unwrap();
-    let ref mut w = BufWriter::new(file);
+    let w = BufWriter::new(file);
 
     let mut encoder = png::Encoder::new(w, 4096, 4096);
     encoder.set_color(png::ColorType::Rgba);

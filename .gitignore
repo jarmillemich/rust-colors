@@ -1,2 +1,5 @@
 /target
 *.png
+
+perf.*
+flamegraph.svg

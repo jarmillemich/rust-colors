@@ -1,4 +1,4 @@
-use std::{fmt, rc::Rc};
+use std::fmt;
 
 #[derive(Clone, Debug, Hash, Eq, PartialEq)]
 pub struct SpacePoint {
@@ -32,6 +32,10 @@ impl SpacePoint {
 
         ret
     }
+
+    pub fn offset(&self) -> usize {
+        usize::try_from(self.y << 12 | self.x).expect("Should not index a point beyond 2^24")
+    }
 }
 
 impl fmt::Display for SpacePoint {
@@ -58,12 +62,18 @@ impl ColorPoint {
         ColorPoint { r: 0, g: 0, b: 0 }
     }
 
-    pub fn distance_to(&self, other: &Rc<ColorPoint>) -> i32 {
+    pub fn distance_to(&self, other: &ColorPoint) -> i32 {
         let dr: i32 = i32::from(self.r) - i32::from(other.r);
         let dg: i32 = i32::from(self.g) - i32::from(other.g);
         let db: i32 = i32::from(self.b) - i32::from(other.b);
 
         dr * dr + dg * dg + db * db
+    }
+
+    pub fn offset(&self) -> usize {
+        usize::from(self.r) |
+        (usize::from(self.g)<<8) | 
+        (usize::from(self.b)<<16)
     }
 }
 
@@ -75,8 +85,8 @@ impl fmt::Display for ColorPoint {
 
 #[derive(Hash, Eq, PartialEq)]
 pub struct Point {
-    pub space: usize,//Rc<SpacePoint>,
-    pub color: Rc<ColorPoint>,
+    pub space: usize,//Arc<SpacePoint>,
+    pub color: ColorPoint,
     //pub idx: i32,
 }
 

@@ -24,8 +24,12 @@ impl<K: core::hash::Hash + Ord + Clone + Copy, V> CrashMap<K, V> {
         }
     }
 
-    fn get_capacity(&self) -> usize {
+    pub fn get_capacity(&self) -> usize {
         1 << self.bin_scale
+    }
+
+    pub fn len(&self) -> usize {
+        self.count.load(Ordering::Relaxed) as usize
     }
 
     fn get_bin<'a>(&'a self, key: K) -> &'a BinType<K, V> {
@@ -67,40 +71,83 @@ impl<K: core::hash::Hash + Ord + Clone + Copy, V> CrashMap<K, V> {
     }
 }
 
+pub struct CrashSet<K: core::hash::Hash + Ord + Clone + Copy> {
+    map: CrashMap<K, ()>
+}
 
-#[test]
-fn test_contains_key() {
-    let thang = CrashMap::with_capacity(1024);
-    thang.insert(16, 32);
+impl<K: core::hash::Hash + Ord + Clone + Copy> CrashSet<K> {
+    pub fn with_capacity(capacity: usize) -> CrashSet<K> {
+        CrashSet { map: CrashMap::with_capacity(capacity) }
+    }
 
-    assert!(thang.contains_key(16));
-    assert!(!thang.contains_key(17));
+    pub fn get_capacity(&self) -> usize { self.map.get_capacity() }
+    pub fn len(&self) -> usize { self.map.len() }
+    pub fn contains(&self, key: K) -> bool { self.map.contains_key(key) }
+    pub fn insert(&self, key: K) -> bool {
+        self.map.insert(key, ()) != None
+    }
+    pub fn remove(&self, key: K) -> bool {
+        self.map.remove(key) != None
+    }
 
-    thang.insert(17, 213);
-
-    assert!(thang.contains_key(17));
+    pub fn foreach_lockfree<F: FnMut(&K) -> ()>(&self, mut f: F) {
+        self.map.foreach_lockfree(|(&k, &_)| f(&k));
+    }
 }
 
 #[test]
-fn test_iter() {
+fn test_map_contains_key() {
+    let map = CrashMap::with_capacity(1024);
+    map.insert(16, 32);
+
+    assert_eq!(map.len(), 1);
+    assert!(map.contains_key(16));
+    assert!(!map.contains_key(17));
+
+    map.insert(17, 213);
+
+    assert!(map.contains_key(17));
+}
+
+#[test]
+fn test_map_iter() {
     // Note, full retrieval is guaranteed ONLY when single threaded
     // In a multi-threaded environment, iter may skip bins that are locked
-    let thang = CrashMap::with_capacity(1024);
-    thang.insert(16, -16);
-    thang.insert(17, -17);
-    thang.insert(18, -18);
+    let map = CrashMap::with_capacity(1024);
+    map.insert(16, -16);
+    map.insert(17, -17);
+    map.insert(18, -18);
+
+    assert_eq!(map.len(), 3);
 
     let mut results = vec![];
 
-    thang.foreach_lockfree(|(&k, &v)| {
+    map.foreach_lockfree(|(&k, &v)| {
         results.push((k, v));
     });
+
+    assert_eq!(map.len(), 3);
 
     assert_eq!(results.len(), 3);
     assert!(results.contains(&(16, -16)));
     assert!(results.contains(&(17, -17)));
     assert!(results.contains(&(18, -18)));
+}
 
+#[test]
+fn test_set_contains() {
+    let set = CrashSet::with_capacity(1024);
+    set.insert(1);
+    set.insert(7);
+    set.insert(13);
 
-    
+    assert_eq!(set.len(), 3);
+
+    assert!(set.contains(1));
+    assert!(set.contains(7));
+    assert!(set.contains(13));
+
+    assert!(!set.contains(-1));
+    assert!(!set.contains(0));
+    assert!(!set.contains(17));
 }

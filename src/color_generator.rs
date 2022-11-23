@@ -83,7 +83,7 @@ impl ColorGenerator {
           self.root.add(new_point);
           assert!(self.writing_spaces.clear(neighbor), "Somebody cleared our lock");
         } else {
-          println!("We probably just saved your life!");
+          //println!("We probably just saved your life!");
         }
       }
     }
@@ -104,7 +104,19 @@ impl ColorGenerator {
 
       // Perform the search
       // IMPORTANT: This function may return points that are not fully written yet, or have also been found by somebody else
-      let next = self.root.find_nearest(at).expect("Tried to add a pixel but there were none to grow on");
+      // ALSO IMPORTANT: With the new threading impl, somebody might remove a point as we are searching to it, try again for this
+      let next = self.root.find_nearest(at);
+        //.expect("Tried to add a pixel but there were none to grow on");
+
+      // println!("Found {}", match &next {
+      //   None => format!("None"),
+      //   Some(p) => format!("{}", p.space)
+      // });
+
+      let next = match next {
+        None => continue,
+        Some(n) => n
+      };
 
       // Don't take if not fully available yet, somebody else might still be working on adding it
       if !self.avail_spaces.test(next.color.offset()) { 
@@ -112,8 +124,6 @@ impl ColorGenerator {
         continue;
       }
 
-
-      //assert!(self.root.has_point(&next), "Found in search but not yet in root {} at {}", next, self.root.len());
       if !self.root.has_point(&next) {
         //println!("Partial color miss?");
         continue;
@@ -148,7 +158,7 @@ impl ColorGenerator {
     let wall_start_time = Arc::new(Instant::now());
     
     let mut handles = vec![];
-    for thread_id in 0..2 {
+    for thread_id in 0..16 {
 
       let selfish_src = Arc::clone(self_src);
       
@@ -211,7 +221,7 @@ impl ColorGenerator {
               }
 
               let last_misses = collision_misses.fetch_add(1, Ordering::Relaxed);
-              if last_misses & 65535 == 0 { println!("Write misses: {last_misses}/{i}/{}/{} -> {}, of {} in {thread_id}", candidate.space, at, candidate.color, selfish.root.len()); }
+              if last_misses & 65535 == 0 { println!("Write misses: {last_misses}/{i}/{}/{} -> {}, of {} in {thread_id}", candidate.space, at, candidate.color, 0); }
               if last_misses > 1024 * 1024 {
                 panic!("Probably dead");
               }
@@ -236,8 +246,8 @@ impl ColorGenerator {
           
 
           // Sanity
-          assert!(!selfish.root.has(next.space), "Called remove but still present");
-          assert!(!selfish.root.has_point(&next), "Called remove but still present");
+          // assert!(!selfish.root.has(next.space), "Called remove but still present");
+          // assert!(!selfish.root.has_point(&next), "Called remove but still present");
 
           // Add the color as an option on our neighbors
           timed(&add_time, || {

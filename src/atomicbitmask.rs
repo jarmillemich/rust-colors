@@ -1,4 +1,4 @@
-use std::{sync::{atomic::{AtomicU8, Ordering, AtomicUsize}, Arc}, thread, fs::File, io::Write};
+use std::{sync::{atomic::{AtomicU8, Ordering}}, fs::File, io::Write};
 
 pub struct AtomicBitMask {
     bits: Box<Vec<AtomicU8>>,
@@ -69,6 +69,10 @@ fn basic_test() {
 
 #[test]
 fn threaded_test() {
+    use std::sync::Arc;
+    use core::sync::atomic::AtomicUsize;
+    use std::thread;
+
     let num_bits = 4096;
     let thread_count = 16;
     

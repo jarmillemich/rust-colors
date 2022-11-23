@@ -44,7 +44,7 @@ impl fmt::Display for SpacePoint {
     }
 }
 
-#[derive(Clone, Copy, Debug, Hash, Eq, PartialEq)]
+#[derive(Clone, Copy, Debug, Hash, Eq, PartialEq, PartialOrd, Ord)]
 pub struct ColorPoint {
     pub r: u8,
     pub g: u8,
@@ -83,11 +83,21 @@ impl fmt::Display for ColorPoint {
     }
 }
 
-#[derive(Hash, Eq, PartialEq)]
+#[derive(Hash, Eq, PartialEq, PartialOrd)]
 pub struct Point {
     pub space: usize,//Arc<SpacePoint>,
     pub color: ColorPoint,
     //pub idx: i32,
+}
+
+impl Ord for Point {
+    fn cmp(&self, other: &Self) -> std::cmp::Ordering {
+        match self.space.cmp(&other.space) {
+            std::cmp::Ordering::Equal => self.color.cmp(&other.color),
+            std::cmp::Ordering::Greater => std::cmp::Ordering::Greater,
+            std::cmp::Ordering::Less => std::cmp::Ordering::Less
+        }
+    }
 }
 
 

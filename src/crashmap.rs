@@ -1,13 +1,16 @@
 use std::{sync::{RwLock, atomic::{Ordering, AtomicIsize}}, hash::Hasher, collections::BTreeMap};
 use fnv::FnvHasher;
 
+use crate::atomicbitmask::AtomicBitMask;
+
 type BinType<K, V> = RwLock<BTreeMap<K, V>>;
 
 /// An atomic addition/removal HashMap with very weak guarantees!
 pub struct CrashMap<K: core::hash::Hash + Ord, V> {
     bins: Box<[BinType<K, V>]>,
     bin_scale: u8,
-    count: AtomicIsize
+    count: AtomicIsize,
+    occupation: AtomicBitMask,
 }
 
 impl<K: core::hash::Hash + Ord + Clone + Copy, V> CrashMap<K, V> {
@@ -21,6 +24,7 @@ impl<K: core::hash::Hash + Ord + Clone + Copy, V> CrashMap<K, V> {
             bins: (0..capacity_actual).map(|_| RwLock::new(BTreeMap::new())).collect::<Vec<_>>().into_boxed_slice(),
             bin_scale,
             count: AtomicIsize::default(),
+            occupation: AtomicBitMask::new(capacity_actual),
         }
     }
 
@@ -32,12 +36,33 @@ impl<K: core::hash::Hash + Ord + Clone + Copy, V> CrashMap<K, V> {
         self.count.load(Ordering::Relaxed) as usize
     }
 
-    fn get_bin<'a>(&'a self, key: K) -> &'a BinType<K, V> {
+    pub fn is_empty(&self) -> bool {
+        self.len() == 0
+    }
+
+    pub fn get<TReturn, F: FnOnce(&V) -> TReturn>(&self, key: &K, f: F) -> Option<TReturn> {
+        let bin = self.get_bin(*key);
+        let lock = bin.read().unwrap();
+        lock.get(key).map(|entry| {
+            f(entry)
+        })
+
+    }
+
+    fn bin_idx(&self, key: K) -> usize {
         let mut hasher = FnvHasher::default();
         key.hash(&mut hasher);
         let key_hash = hasher.finish();
-        let bin_idx = key_hash as usize & (self.get_capacity() - 1);
-        &self.bins[bin_idx]
+        key_hash as usize & (self.get_capacity() - 1)
+    }
+
+    fn get_bin<'a>(&'a self, key: K) -> &'a BinType<K, V> {
+        self.get_bin_idx(key).0
+    }
+
+    fn get_bin_idx<'a>(&'a self, key: K) -> (&'a BinType<K, V>, usize) {
+        let bin_idx = self.bin_idx(key);
+        (&self.bins[bin_idx], bin_idx)
     }
 
     pub fn contains_key(&self, key: K) -> bool {
@@ -46,32 +71,60 @@ impl<K: core::hash::Hash + Ord + Clone + Copy, V> CrashMap<K, V> {
     }
 
     pub fn insert(&self, key: K, value: V) -> Option<V> {
-        let bin = self.get_bin(key);
+        let (bin, idx) = self.get_bin_idx(key);
         let mut writer = bin.write().unwrap();
-        self.count.fetch_add(1, Ordering::Relaxed);
-        writer.insert(key, value)
+        
+        let ret = writer.insert(key, value);
+
+        if writer.len() > 0 {
+            self.occupation.test_and_set(idx);
+        }
+
+        match ret {
+            None => { self.count.fetch_add(1, Ordering::Relaxed); },
+            _ => {}
+        };
+
+        ret
     }
 
     pub fn remove(&self, key: K) -> Option<V> {
-        let bin = self.get_bin(key);
+        let (bin, idx) = self.get_bin_idx(key);
         let mut writer = bin.write().unwrap();
-        self.count.fetch_add(-1, Ordering::Relaxed);
-        writer.remove(&key)
+        
+        let ret = writer.remove(&key);
+
+        if writer.len() == 0 {
+            self.occupation.clear(idx);
+        }
+
+        match ret {
+            Some(_) => { self.count.fetch_add(-1, Ordering::Relaxed); },
+            _ => {}
+        };
+
+        ret
     }
 
     pub fn foreach_lockfree<F: FnMut((&K, &V)) -> ()>(&self, mut f: F) -> () {
-        for bin in self.bins.iter() {
+        for bin_idx in 0..self.get_capacity() {
+            if !self.occupation.test(bin_idx) { continue; }
+
+            let bin = &self.bins[bin_idx];
             // Try and get a read lock. If not, just carry on
+            // TODO we should skip these if they are empty, lock acquisition is killing us here
             if let Ok(lock) = bin.try_read() {
                 for item in lock.iter() {
                     f(item);
                 }
+            } else {
+                //println!("      bin miss")
             }
         }
     }
 }
 
-pub struct CrashSet<K: core::hash::Hash + Ord + Clone + Copy> {
+pub struct CrashSet<K: core::hash::Hash + Ord + Clone> {
     map: CrashMap<K, ()>
 }
 
@@ -82,6 +135,7 @@ impl<K: core::hash::Hash + Ord + Clone + Copy> CrashSet<K> {
 
     pub fn get_capacity(&self) -> usize { self.map.get_capacity() }
     pub fn len(&self) -> usize { self.map.len() }
+    pub fn is_empty(&self) -> bool { self.map.is_empty() }
     pub fn contains(&self, key: K) -> bool { self.map.contains_key(key) }
     pub fn insert(&self, key: K) -> bool {
         self.map.insert(key, ()) != None

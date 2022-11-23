@@ -16,7 +16,8 @@ bitvec = "1.0.1"
 # Some faster hashing algos for our hashmaps/hashsets
 fnv = "1.0.7"
 # Concurrent hashmaps/sets
-chashmap = "2.2.2"
+flurry = "0.4.0"
+parking_lot = "0.12.1"
 
 [profile.release]
 debug = true

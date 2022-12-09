@@ -112,7 +112,6 @@ impl<K: core::hash::Hash + Ord + Clone + Copy, V> CrashMap<K, V> {
 
             let bin = &self.bins[bin_idx];
             // Try and get a read lock. If not, just carry on
-            // TODO we should skip these if they are empty, lock acquisition is killing us here
             if let Ok(lock) = bin.try_read() {
                 for item in lock.iter() {
                     f(item);
@@ -121,6 +120,14 @@ impl<K: core::hash::Hash + Ord + Clone + Copy, V> CrashMap<K, V> {
                 //println!("      bin miss")
             }
         }
+    }
+
+    pub fn get_or_insert<FI: FnOnce() -> V, FG: FnOnce(&V)>(&self, key: K, insert: FI, get: FG) {
+        let mut bin = self.get_bin(key).write().unwrap();
+        let item = bin.entry(key)
+            .or_insert_with(insert);
+
+        get(item);
     }
 }
 

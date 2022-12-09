@@ -22,6 +22,9 @@ fn main() {
     println!("Shuffle at {}", elapsed.as_millis());
 
     whatever.read().unwrap().add_next_seed_pixel(1024, 1024);
+    whatever.read().unwrap().add_next_seed_pixel(3072, 1024);
+    whatever.read().unwrap().add_next_seed_pixel(1024, 3072);
+    whatever.read().unwrap().add_next_seed_pixel(3072, 3072);
     let elapsed = start.elapsed();
     println!("Add seed at {}", elapsed.as_millis());
 

@@ -222,9 +222,9 @@ impl ColorGenerator {
 
               let last_misses = collision_misses.fetch_add(1, Ordering::Relaxed);
               if last_misses & 65535 == 0 { println!("Write misses: {last_misses}/{i}/{}/{} -> {}, of {} in {thread_id}", candidate.space, at, candidate.color, 0); }
-              if last_misses > 1024 * 1024 {
-                panic!("Probably dead");
-              }
+              // if last_misses > 1024 * 1024 {
+              //   panic!("Probably dead");
+              // }
             })
           );
 

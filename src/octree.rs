@@ -94,12 +94,17 @@ impl Octree {
           .write()
           .push(point); 
       });
+
+    // self.points.get_or_insert(
+    //   point.space,
+    //   || RwLock::new(Vec::with_capacity(4)),
+    //   move |p| {
+    //     p.write().push(point);
+    //   }
+    // );
       
 
     //println!("Added {} {} at {} with {} in {}", &point.space, point.color.offset(), self.depth, self.len(), self.bounds);
-
-    // Add to this node
-    //self.points.pin().insert(point);
 
     
   }
@@ -207,7 +212,9 @@ impl Octree {
     let child = self.get_child(color);
 
     if self.points.is_empty() {
-      panic!("Tried to find nearest but no points at depth {0}", self.depth);
+      //panic!("Tried to find nearest but no points at depth {0}", self.depth);
+      // Probably this occurs because of threading...
+      return None;
     }
 
     let have_search_child = match child {

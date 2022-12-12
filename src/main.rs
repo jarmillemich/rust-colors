@@ -28,8 +28,6 @@ fn main() {
     let elapsed = start.elapsed();
     println!("Add seed at {}", elapsed.as_millis());
 
-    
-
     ColorGenerator::grow_pixels_to(&whatever, 4096*4096);
     let elapsed = start.elapsed();
     println!("Grown at {}", elapsed.as_millis());

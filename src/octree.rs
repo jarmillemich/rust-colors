@@ -26,7 +26,7 @@ struct Search {
   bounds: BoundingBox,
 }
 
-static QUAD_TUNING: usize = 64;
+static QUAD_TUNING: usize = 8;
 static TREE_TUNING_DEPTH: u8 = 3;
 
 impl Octree {
@@ -45,7 +45,7 @@ impl Octree {
       bounds,
       //point_lookup: Arc::new(CrashMap::with_capacity(1024)),
       //points: Arc::new(CrashSet::with_capacity(1024)),
-      points: Arc::new(CrashMap::with_capacity(256 >> depth)), // Heuristic
+      points: Arc::new(CrashMap::with_capacity(512 >> (3 * depth))), // Heuristic
       coord,
       ptr: RwLock::new(Weak::new()),
     });
@@ -79,33 +79,19 @@ impl Octree {
       self.get_or_create_child(&point.color).add(Arc::clone(&point));
     }
 
-    // Add to the lookup helper on this node
-    if !self.points.contains_key(point.space) {
-      self.points.insert(point.space, RwLock::new(Vec::with_capacity(4)));
-    }
+    //println!("Adding {} {} at {} with {} in {}", &point.space, point.color.offset(), self.depth, self.len(), self.bounds);
 
-    self.points
-      //.entry(point.space)
-      // Pre-allocating does not in fact save too much time, unless there's a better strategy?
-      //.or_insert_with(|| RwLock::new(Vec::with_capacity(16384 >> (3 * self.depth))))
-      //.or_insert_with(|| RwLock::new(Vec::new()))
-      .get(&point.space.clone(), move |p| {
-        p
-          .write()
-          .push(point); 
-      });
-
-    // self.points.get_or_insert(
-    //   point.space,
-    //   || RwLock::new(Vec::with_capacity(4)),
-    //   move |p| {
-    //     p.write().push(point);
-    //   }
-    // );
+    // Add the point here
+    self.points.get_or_insert(
+      point.space.clone(),
+      // Grab us some space if we didn't have this list yet
+      || RwLock::new(Vec::with_capacity(4)),
+      move |p| {
+        p.write().push(point);
+      }
+    );
       
-
-    //println!("Added {} {} at {} with {} in {}", &point.space, point.color.offset(), self.depth, self.len(), self.bounds);
-
+    assert!(self.len() > 0);
     
   }
 

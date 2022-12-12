@@ -107,8 +107,13 @@ impl<K: core::hash::Hash + Ord + Clone + Copy, V> CrashMap<K, V> {
     }
 
     pub fn foreach_lockfree<F: FnMut((&K, &V)) -> ()>(&self, mut f: F) -> () {
-        for bin_idx in 0..self.get_capacity() {
-            if !self.occupation.test(bin_idx) { continue; }
+        //for bin_idx in 0..self.get_capacity() {
+        for bin_idx in self.occupation.iter_set() {
+            //if !self.occupation.test(bin_idx) { continue; }
+
+            if bin_idx >= 1 << self.bin_scale {
+                panic!("Looked in too many bins");
+            }
 
             let bin = &self.bins[bin_idx];
             // Try and get a read lock. If not, just carry on
@@ -116,18 +121,38 @@ impl<K: core::hash::Hash + Ord + Clone + Copy, V> CrashMap<K, V> {
                 for item in lock.iter() {
                     f(item);
                 }
-            } else {
-                //println!("      bin miss")
             }
         }
     }
 
     pub fn get_or_insert<FI: FnOnce() -> V, FG: FnOnce(&V)>(&self, key: K, insert: FI, get: FG) {
-        let mut bin = self.get_bin(key).write().unwrap();
-        let item = bin.entry(key)
-            .or_insert_with(insert);
+        
+        let (bin, idx) = self.get_bin_idx(key);
+        let lock = bin.read().unwrap();
+        
+        if !lock.contains_key(&key) {
+            // Upgrade to a write lock
+            drop(lock);
 
-        get(item);
+            let mut lock = bin.write().unwrap();
+
+            lock.insert(key, insert());
+
+            self.count.fetch_add(1, Ordering::Relaxed);
+            self.occupation.test_and_set(idx);
+
+            let entry = lock.get(&key).unwrap();
+            get(entry);
+        } else {
+            let entry = lock.get(&key).unwrap();
+            get(entry);
+        }
+        
+        // let mut bin = self.get_bin(key).write().unwrap();
+        // let item = bin.entry(key)
+        //     .or_insert_with(insert);
+
+        // get(item);
     }
 }
 

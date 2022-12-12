@@ -148,6 +148,8 @@ impl ColorGenerator {
       panic!("Tried to call grow_pixels_to without any seed pixels");
     }
 
+    println!("Start of the party with {} existing", self_src.read().unwrap().root.len());
+
     let search_time_src = Arc::new(AtomicU64::default());
     let place_time_src = Arc::new(AtomicU64::default());
     let remove_time_src = Arc::new(AtomicU64::default());
@@ -158,7 +160,7 @@ impl ColorGenerator {
     let wall_start_time = Arc::new(Instant::now());
     
     let mut handles = vec![];
-    for thread_id in 0..16 {
+    for thread_id in 0..1 {
 
       let selfish_src = Arc::clone(self_src);
       

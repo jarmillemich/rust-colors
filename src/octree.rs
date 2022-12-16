@@ -1,11 +1,21 @@
-use std::{borrow::Borrow, sync::{Weak, Arc}};
+use std::{borrow::Borrow, sync::{Weak, Arc}, ops::Deref};
 
-use crate::{points::{ColorPoint, Point}, bounding_box::BoundingBox, crashmap::{CrashMap}};
+use crate::{points::{ColorPoint, Point, SpacePoint}, bounding_box::BoundingBox, crashmap::{CrashMap}};
 use parking_lot::RwLock;
 
 //type OctreeLink = RwLock<Octree>;
 type ParentLink = Option<Weak<Octree>>;
 type ChildLink = RwLock<Option<Arc<Octree>>>;
+//type PointBucket = RwLock<Vec<Point>>;
+struct PointBucket(RwLock<Vec<Point>>);
+
+impl Deref for PointBucket {
+  type Target = RwLock<Vec<Point>>;
+
+  fn deref(&self) -> &Self::Target {
+    &self.0
+  }
+}
 
 pub struct Octree {
   depth: u8,
@@ -14,13 +24,14 @@ pub struct Octree {
   bounds: BoundingBox,
   //point_lookup: Arc<CrashMap<usize, RwLock<Vec<Arc<Point>>>>>,
   //points: Arc<CrashSet<Arc<Point>>>,
-  points: Arc<CrashMap<usize, RwLock<Vec<Arc<Point>>>>>,
+  points: Arc<CrashMap<SpacePoint, PointBucket>>,
   coord: usize,
   ptr: RwLock<Weak<Octree>>,
 }
 
+
 struct Search {
-  canidate: Arc<Point>,
+  canidate: Point,
   source: ColorPoint,
   best_distance_sq: i32,
   bounds: BoundingBox,
@@ -28,6 +39,7 @@ struct Search {
 
 static QUAD_TUNING: usize = 8;
 static TREE_TUNING_DEPTH: u8 = 3;
+
 
 impl Octree {
   pub fn new(
@@ -45,7 +57,7 @@ impl Octree {
       bounds,
       //point_lookup: Arc::new(CrashMap::with_capacity(1024)),
       //points: Arc::new(CrashSet::with_capacity(1024)),
-      points: Arc::new(CrashMap::with_capacity(512 >> (3 * depth))), // Heuristic
+      points: Arc::new(CrashMap::with_capacity(256 >> (3 * depth))), // Heuristic
       coord,
       ptr: RwLock::new(Weak::new()),
     });
@@ -58,17 +70,17 @@ impl Octree {
   //pub fn diameter(&self) -> u8 { 256 >> self.depth }
   pub fn radius(&self) -> i32 { 128 >> self.depth }
 
-  pub fn has(&self, pt: usize) -> bool {
+  pub fn has(&self, pt: SpacePoint) -> bool {
     self.points.contains_key(pt)
   }
 
-  pub fn has_point(&self, pt: &Arc<Point>) -> bool {
-    self.points.get(&pt.space, |colors| {
+  pub fn has_point(&self, pt: &Point) -> bool {
+    self.points.get(&pt.space(), |colors| {
       colors.read().contains(pt)
     }).unwrap_or(false)
   }
 
-  pub fn add(&self, point: Arc<Point>) {
+  pub fn add(&self, point: Point) {
     //println!("    Add {point} at {}", self.depth);
     
     if self.depth < TREE_TUNING_DEPTH {
@@ -76,16 +88,21 @@ impl Octree {
       // NB Probably it is important for thread-ness that we add to our children first?
       // But what if we add to child, search find, start removing, and we haven't gotten back to the root yet?
       // TODO add another bitvec for "available" to do the search retry things?
-      self.get_or_create_child(&point.color).add(Arc::clone(&point));
+      self.get_or_create_child(&point.color()).add(point);
     }
 
     //println!("Adding {} {} at {} with {} in {}", &point.space, point.color.offset(), self.depth, self.len(), self.bounds);
 
     // Add the point here
     self.points.get_or_insert(
-      point.space.clone(),
+      point.space(),
       // Grab us some space if we didn't have this list yet
-      || RwLock::new(Vec::with_capacity(4)),
+      #[inline(never)]
+      || {
+        //point_pool.pull()
+        PointBucket(RwLock::new(Vec::with_capacity(4)))
+      },
+      #[inline(never)]
       move |p| {
         p.write().push(point);
       }
@@ -95,8 +112,8 @@ impl Octree {
     
   }
 
-  pub fn remove(&self, point: &Arc<Point>) {
-    if !self.has_point(point) {
+  pub fn remove(&self, point: Point) {
+    if !self.has_point(&point) {
       panic!("Removing non-existent point {point}");
     }
 
@@ -104,7 +121,7 @@ impl Octree {
 
     // NB we are removing by the spatial component here, so get all the actual points with this
     // Grab all our Rcs to remove
-    let pts_maybe = self.points.remove(point.space);
+    let pts_maybe = self.points.remove(point.space());
 
     //println!("    Removing {} instances of color {}", pts.borrow().len(), &point.color);
     if let Some(pts) = pts_maybe {
@@ -112,7 +129,7 @@ impl Octree {
 
       for rc in pts.read().iter() {
         // Remove from self
-        self.remove_spec(&rc);
+        self.remove_spec(*rc);
       }
     }
 
@@ -123,7 +140,7 @@ impl Octree {
   }
 
   // Like remove but we already have all the color/space info
-  fn remove_spec(&self, point: &Arc<Point>) {
+  fn remove_spec(&self, point: Point) {
     // Try to remove, if we didn't have it then we're done
 
     //println!("  Remove spec {} {} at {} with {} in {}", point.space, point.color.offset(), self.depth, self.len(), self.bounds);
@@ -131,11 +148,11 @@ impl Octree {
     //println!("    Removed {point} at {}", self.depth);
     if self.depth > 0 { // NB we already removed it from the root...
       // Note: this is very fine because we might have already removed this space point
-      self.points.remove(point.space);
+      self.points.remove(point.space());
     }
 
     // Remove from appropriate child
-    if let Some(child) = self.get_child(&point.color) {
+    if let Some(child) = self.get_child(&point.color()) {
       child.remove_spec(point)
     }
   }
@@ -164,7 +181,7 @@ impl Octree {
           Some(Weak::clone(&self.ptr.read())),
           self.depth + 1,
           self.coord | caddr << (18 - 3 * self.depth),
-          BoundingBox::new(clr, clg, clb, cur, cug, cub)
+          BoundingBox::new(clr, clg, clb, cur, cug, cub),
         );
 
         Some(child)
@@ -194,7 +211,7 @@ impl Octree {
     (raddr << 2 | gaddr << 1 | baddr) as usize
   }
 
-  pub fn find_nearest(&self, color: &ColorPoint) -> Option<Arc<Point>> {
+  pub fn find_nearest(&self, color: &ColorPoint) -> Option<Point> {
     let child = self.get_child(color);
 
     if self.points.is_empty() {
@@ -214,7 +231,7 @@ impl Octree {
       // If we are small or we have no children, search here
       let ret = self.nearest_in_self(color)?;
 
-      let distance = ret.color.distance_to(color);
+      let distance = ret.color().distance_to(color);
       let radius_sq = self.radius() * self.radius();
 
       if self.depth > 0 && distance > radius_sq {
@@ -237,7 +254,7 @@ impl Octree {
           .borrow()
           .nn_search_up(search, self.ptr.read().upgrade().expect("should have self"))?;
 
-        return Some(Arc::clone(&search.canidate));
+        return Some(search.canidate);
       }
 
       Some(ret)
@@ -246,29 +263,34 @@ impl Octree {
     }
   }
 
-  fn nearest_in_self(&self, color: &ColorPoint) -> Option<Arc<Point>> {
-    // let result = self.points.iter()
-    //   .map(|p| (&p, p.color.distance_to(color)))
-    //   .min_by(|a, b| a.1.cmp(&b.1));
+  fn nearest_in_self(&self, color: &ColorPoint) -> Option<Point> {
     //println!("Selfish for {color} at {} with {} and {}", self.bounds, self.points.len(), self.points.get_capacity());
 
     let mut best_dist = i32::MAX;
     let mut best = None;
+    let mut what = 0;
 
-    self.points.foreach_lockfree(|(_, points)| {
+    self.points.foreach_lockfree(
+      #[inline(never)]
+      |(_, points)| {
       //println!("    bucket");
       for p in points.read().iter() {
         //println!("    point");
-        let dist = p.color.distance_to(color);
+        let dist = p.color().distance_to(color);
         if dist < best_dist {
           best_dist = dist;
-          best = Some(Arc::clone(&p));
+          best = Some(*p);
+          what += 1;
         }
       }
     });
 
+    // if what > 10 {
+    //   println!("Did {what}");
+    // }
+
     match best {
-      Some(p) => Some(Arc::clone(&p)),
+      Some(p) => Some(p),
       None => None
     }
   }
@@ -314,7 +336,7 @@ impl Octree {
     if self.points.len() <= QUAD_TUNING {
       // We have few enough points, search here
       let our_nearest = self.nearest_in_self(&search.source)?;
-      let nearest_dist = search.source.distance_to(&our_nearest.color);
+      let nearest_dist = search.source.distance_to(&our_nearest.color());
 
       if nearest_dist < search.best_distance_sq {
         // New candidate!

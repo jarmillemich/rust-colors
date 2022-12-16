@@ -18,6 +18,8 @@ fnv = "1.0.7"
 # Concurrent hashmaps/sets
 flurry = "0.4.0"
 parking_lot = "0.12.1"
+once_cell = "1.16.0"
+lazy_static = "1.4.0"
 
 [profile.release]
 debug = true

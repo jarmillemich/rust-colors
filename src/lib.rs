@@ -1,4 +1,5 @@
 #![feature(box_syntax, generators, generator_trait)]
+#![feature(portable_simd)]
 
 pub mod points;
 pub mod bounding_box;

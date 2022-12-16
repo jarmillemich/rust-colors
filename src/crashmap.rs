@@ -109,13 +109,10 @@ impl<K: core::hash::Hash + Ord + Clone + Copy, V> CrashMap<K, V> {
     pub fn foreach_lockfree<F: FnMut((&K, &V)) -> ()>(&self, mut f: F) -> () {
         //for bin_idx in 0..self.get_capacity() {
         for bin_idx in self.occupation.iter_set() {
-            //if !self.occupation.test(bin_idx) { continue; }
-
-            if bin_idx >= 1 << self.bin_scale {
-                panic!("Looked in too many bins");
-            }
+            assert!(bin_idx < 1 << self.bin_scale, "Looked in too many bins");
 
             let bin = &self.bins[bin_idx];
+            
             // Try and get a read lock. If not, just carry on
             if let Ok(lock) = bin.try_read() {
                 for item in lock.iter() {

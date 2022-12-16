@@ -1,4 +1,4 @@
-use std::{sync::{atomic::{AtomicU8, Ordering, AtomicU64}}, fs::File, io::Write};
+use std::{sync::{atomic::{Ordering, AtomicU64}}, fs::File, io::Write};
 
 // Atomic type holding the slot values
 type AtomicType = AtomicU64;

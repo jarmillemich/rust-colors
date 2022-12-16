@@ -6,6 +6,7 @@ use std::{path::Path};
 use std::fs::File;
 use std::io::BufWriter;
 
+
 use crate::image::Image;
 use crate::{points::{ColorPoint, SpacePoint, Point}, octree::Octree, bounding_box::BoundingBox,atomicbitmask::AtomicBitMask};
 
@@ -59,7 +60,8 @@ impl ColorGenerator {
     self.image.write(space, color);
 
     // Add our intial neighbors
-    self.add_neighbors(space, color);
+    let mut add_vec = Vec::with_capacity(4);
+    self.add_neighbors(space, color, &mut add_vec);
 
     // Mark as ready for the workers
     self.avail_spaces.test_and_set(color.offset());
@@ -68,20 +70,18 @@ impl ColorGenerator {
     
   }
 
-  fn add_neighbors(&self, space: &SpacePoint, color: &ColorPoint) {
-    for neighbor in space.get_neighbors() {
-      if self.written_spaces.test(neighbor) || self.writing_spaces.test(neighbor) {
+  fn add_neighbors(&self, space: &SpacePoint, color: &ColorPoint, add_vec: &mut Vec<SpacePoint>) {
+    space.get_neighbors(add_vec);
+    for neighbor in add_vec {
+      if self.written_spaces.test(neighbor.offset()) || self.writing_spaces.test(neighbor.offset()) {
         continue;
       } else {
-        let new_point: Arc<Point> = Arc::new(Point {
-          color: color.clone(),
-          space: neighbor
-        });
+        let new_point: Point = Point::new(&neighbor, color);
 
         // XXX Are we a bad person for this?
-        if !self.writing_spaces.test_and_set(neighbor) {
+        if !self.writing_spaces.test_and_set(neighbor.offset()) {
           self.root.add(new_point);
-          assert!(self.writing_spaces.clear(neighbor), "Somebody cleared our lock");
+          assert!(self.writing_spaces.clear(neighbor.offset()), "Somebody cleared our lock");
         } else {
           //println!("We probably just saved your life!");
         }
@@ -92,9 +92,9 @@ impl ColorGenerator {
   /// Attempts to locate the next point to paint to.
   /// Attempts to do this in a thread safe way, reporting potential collisions to color_miss and collision_miss for diagnostics
   fn find_next_point<
-    F1 : Fn(Arc<Point>),
-    F2 : Fn(Arc<Point>)
-  >(&self, at: &ColorPoint, color_miss: F1, collision_miss: F2) -> Arc<Point> {
+    F1 : Fn(Point),
+    F2 : Fn(Point)
+  >(&self, at: &ColorPoint, color_miss: F1, collision_miss: F2) -> Point {
     loop {
       // Wait for somebody to populate another point
       if self.root.len() == 0 {
@@ -119,7 +119,7 @@ impl ColorGenerator {
       };
 
       // Don't take if not fully available yet, somebody else might still be working on adding it
-      if !self.avail_spaces.test(next.color.offset()) { 
+      if !self.avail_spaces.test(next.color().offset()) { 
         color_miss(next);
         continue;
       }
@@ -131,8 +131,8 @@ impl ColorGenerator {
 
       // Don't take something somebody else has already claimed, e.g. if we search it up at the same time
       // Note this will atomically claim the point if it is not already
-      if !self.writing_spaces.test_and_set(next.space) { 
-        assert!(!self.written_spaces.test(next.space), "Marked written but found in search");
+      if !self.writing_spaces.test_and_set(next.space().offset()) { 
+        assert!(!self.written_spaces.test(next.space().offset()), "Marked written but found in search");
         break next; 
       }
       
@@ -160,7 +160,7 @@ impl ColorGenerator {
     let wall_start_time = Arc::new(Instant::now());
     
     let mut handles = vec![];
-    for thread_id in 0..1 {
+    for thread_id in 0..16 {
 
       let selfish_src = Arc::clone(self_src);
       
@@ -177,6 +177,7 @@ impl ColorGenerator {
       let handle = thread::Builder::new().name(format!("Worker {}", thread_id)).spawn(move || {
 
         let selfish = selfish_src.read().unwrap();
+        let mut add_vec = Vec::with_capacity(4);
         
         loop {
           let i = selfish.current_color_idx.fetch_add(1, Ordering::SeqCst);
@@ -214,34 +215,34 @@ impl ColorGenerator {
           let next = timed(&search_time, || selfish.find_next_point(at,
             |candidate| {
               let last_misses = color_misses.fetch_add(1, Ordering::Relaxed);
-              if last_misses & 65535 == 0 { println!("Read misses: {last_misses} {} {} {}", candidate.space, at, candidate.color); }
+              if last_misses & 65535 == 0 { println!("Read misses: {last_misses} {} {} {}", candidate.space(), at, candidate.color()); }
               //println!("Read misses: {last_misses} {} {} {}", candidate.space, at, candidate.color);
             }, |candidate| {
-              if my_writes.test(candidate.space) {
+              if my_writes.test(candidate.space().offset()) {
                 // So what, we failed to remove one we visited?
                 panic!("Search returned point that this thread previously wrote");
               }
 
               let last_misses = collision_misses.fetch_add(1, Ordering::Relaxed);
-              if last_misses & 65535 == 0 { println!("Write misses: {last_misses}/{i}/{}/{} -> {}, of {} in {thread_id}", candidate.space, at, candidate.color, 0); }
+              if last_misses & 65535 == 0 { println!("Write misses: {last_misses}/{i}/{}/{} -> {}, of {} in {thread_id}", candidate.space(), at, candidate.color(), 0); }
               // if last_misses > 1024 * 1024 {
               //   panic!("Probably dead");
               // }
             })
           );
 
-          assert!(!my_writes.test_and_set(next.space), "Local double write");
+          assert!(!my_writes.test_and_set(next.space().offset()), "Local double write");
 
           // Write this pixel
           let space = timed(&place_time, || {
-            let space = &selfish.spaces[next.space];
+            let space = &selfish.spaces[next.space().offset()];
             selfish.image.write(space, at);
             space
           });
           
           // Remove this pixel from the tree
           timed(&remove_time, || {
-            selfish.root.remove(&next);
+            selfish.root.remove(next);
           });
 
           
@@ -253,11 +254,11 @@ impl ColorGenerator {
 
           // Add the color as an option on our neighbors
           timed(&add_time, || {
-            selfish.add_neighbors(space, at);
+            selfish.add_neighbors(space, at, &mut add_vec)
           });
           
           // Mark write as completed
-          assert!(!selfish.written_spaces.test_and_set(next.space), "double space write");
+          assert!(!selfish.written_spaces.test_and_set(next.space().offset()), "double space write");
           // Mark colors as available
           assert!(!selfish.avail_spaces.test_and_set(at.offset()), "double color write");
           
@@ -302,7 +303,7 @@ impl ColorGenerator {
 }
 
 
-fn timed<T, F: Fn() -> T>(timer: &Arc<AtomicU64>, task: F) -> T {
+fn timed<T, F: FnMut() -> T>(timer: &Arc<AtomicU64>, mut task: F) -> T {
   let start = Instant::now();
   let ret = task();
   timer.fetch_add(start.elapsed().as_micros() as u64, Ordering::Relaxed);
@@ -319,7 +320,7 @@ fn initialize_color_space() -> Vec<ColorPoint> {
         //let idx = usize::from(r) << 16 | usize::from(g) << 8 | usize::from(b);
         //self.color_space[idx] = &self.colors[idx];
 
-        colors.push(ColorPoint { r, g, b });
+        colors.push(ColorPoint::new(r, g, b));
       }
     }
   }
@@ -331,17 +332,16 @@ fn initialize_color_space() -> Vec<ColorPoint> {
 fn initialize_space_space() -> SpacePoints {
   let now = Instant::now();
   
-  const ZERO: SpacePoint = SpacePoint { x: 0, y: 0 };
+  const ZERO: SpacePoint = SpacePoint(0);
   let mut spaces = box [ZERO; 4096*4096];
 
   println!("  Alloc spaces in {}", now.elapsed().as_millis());
 
   for x in 0..4096u32 {
     for y in 0..4096u32 {
-      let mut point = &mut spaces[space_offset(x, y)];
+      let point = &mut spaces[space_offset(x, y)];
 
-      point.x = x;
-      point.y = y;
+      *point = SpacePoint::new(x, y);
     }
   }
 

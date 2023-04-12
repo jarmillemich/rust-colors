@@ -1,5 +1,3 @@
-#![feature(box_syntax)]
-
 use std::{time::Instant, mem, sync::{atomic::AtomicU8, Arc, RwLock}};
 
 use rust_colors::{color_generator::ColorGenerator};
@@ -21,10 +19,11 @@ fn main() {
     let elapsed = start.elapsed();
     println!("Shuffle at {}", elapsed.as_millis());
 
-    whatever.read().unwrap().add_next_seed_pixel(1024, 1024);
-    whatever.read().unwrap().add_next_seed_pixel(3072, 1024);
-    whatever.read().unwrap().add_next_seed_pixel(1024, 3072);
-    whatever.read().unwrap().add_next_seed_pixel(3072, 3072);
+    // whatever.read().unwrap().add_next_seed_pixel(1024, 1024);
+    // whatever.read().unwrap().add_next_seed_pixel(3072, 1024);
+    // whatever.read().unwrap().add_next_seed_pixel(1024, 3072);
+    // whatever.read().unwrap().add_next_seed_pixel(3072, 3072);
+    whatever.read().unwrap().add_next_seed_pixel(2048, 2048);
     let elapsed = start.elapsed();
     println!("Add seed at {}", elapsed.as_millis());
 

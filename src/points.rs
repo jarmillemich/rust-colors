@@ -1,4 +1,4 @@
-use std::{fmt, simd::{i32x4, SimdInt}, ops::{Sub, Mul}};
+use std::fmt;
 
 // #[derive(Clone, Debug, Hash, Eq, PartialEq)]
 // pub struct SpacePoint {

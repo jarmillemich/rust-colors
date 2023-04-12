@@ -18,9 +18,9 @@ pub struct AtomicBitMask {
 impl AtomicBitMask {
     pub fn new(size: usize) -> AtomicBitMask {
         AtomicBitMask {
-            bits: box std::iter::repeat_with(|| AtomicType::new(0))
+            bits: Box::new(std::iter::repeat_with(|| AtomicType::new(0))
                 .take((size + INNER_BITS - 1)/INNER_BITS) // XXX a more clear way to allocate enough octets?
-                .collect::<Vec<_>>()
+                .collect::<Vec<_>>())
         }
     }
 

@@ -10,7 +10,7 @@ use std::io::BufWriter;
 use crate::image::Image;
 use crate::{points::{ColorPoint, SpacePoint, Point}, octree::Octree, bounding_box::BoundingBox,atomicbitmask::AtomicBitMask};
 
-type SpacePoints = Box<[SpacePoint; 4096*4096]>;
+type SpacePoints = Box<Vec<SpacePoint>>;
 
 pub struct ColorGenerator {
   colors: Vec<ColorPoint>,
@@ -333,7 +333,7 @@ fn initialize_space_space() -> SpacePoints {
   let now = Instant::now();
   
   const ZERO: SpacePoint = SpacePoint(0);
-  let mut spaces = box [ZERO; 4096*4096];
+  let mut spaces = Box::new(vec![ZERO; 4096*4096]);
 
   println!("  Alloc spaces in {}", now.elapsed().as_millis());
 

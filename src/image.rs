@@ -12,9 +12,9 @@ pub struct Image {
 impl Image {
     pub fn new() -> Image {
         Image {
-            r: box std::iter::repeat_with(AtomicU8::default).take(4096*4096).collect(),
-            g: box std::iter::repeat_with(AtomicU8::default).take(4096*4096).collect(),
-            b: box std::iter::repeat_with(AtomicU8::default).take(4096*4096).collect(),
+            r: Box::new(std::iter::repeat_with(AtomicU8::default).take(4096*4096).collect()),
+            g: Box::new(std::iter::repeat_with(AtomicU8::default).take(4096*4096).collect()),
+            b: Box::new(std::iter::repeat_with(AtomicU8::default).take(4096*4096).collect()),
             written: AtomicBitMask::new(4096*4096)
         }
     }
@@ -29,8 +29,8 @@ impl Image {
         self.b[offset].store(color.b, Ordering::Relaxed);
     }
 
-    pub fn to_raw(&self) -> Box<[u8; 4096*4096*4]> {
-        let mut ret = box [0u8; 4096*4096*4];
+    pub fn to_raw(&self) -> Box<Vec<u8>> {
+        let mut ret = Box::new(vec![0u8; 4096*4096*4]);
         for y in 0..4096 {
             for x in 0..4096 {
                 let o = usize::try_from(y << 12 | x).expect("Should not index a point beyond 2^24");

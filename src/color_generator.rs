@@ -8,6 +8,7 @@ use std::io::BufWriter;
 
 
 use crate::image::Image;
+use crate::nn_search_3d::NnSearch3d;
 use crate::{points::{ColorPoint, SpacePoint, Point}, octree::Octree, bounding_box::BoundingBox,atomicbitmask::AtomicBitMask};
 
 type SpacePoints = Box<Vec<SpacePoint>>;

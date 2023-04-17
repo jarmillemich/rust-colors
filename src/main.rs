@@ -37,3 +37,83 @@ fn main() {
 
     println!("All done");
 }
+
+#[test]
+fn test_octree_search_performance() {
+    use rand::Rng;
+    use rust_colors::{octree_leafy::OctreeLeafy, nn_search_3d::NnSearch3d, points::{ColorPoint, Point, SpacePoint}};
+
+    // Have a tree with several thousand points in it and do many searches to check performance
+    let mut tree = OctreeLeafy::init_tree(3);
+
+    let mut rng = rand::thread_rng();
+
+    for i in 0..2000 {
+        let point = Point::new(
+            &SpacePoint::new(i, i), 
+            &ColorPoint::new(rng.gen_range(0..=255), rng.gen_range(0..=255), rng.gen_range(0..=255))
+        );
+        tree.add_sync(point);
+    }
+
+    // Search random points
+    // Optimization hack to actually do the work
+    let mut junk = 0;
+    for _ in 0..10_000 {
+        let search_color = ColorPoint::new(rng.gen_range(0..=255), rng.gen_range(0..=255), rng.gen_range(0..=255));
+        let nearest = tree.find_nearest(&search_color);
+        assert!(nearest.is_some(), "Nearest should be found for color {:?}", search_color);
+        junk += nearest.unwrap().color().r as u64;
+    }
+    println!("Junk: {}", junk);
+}
+
+#[test]
+fn test_octree_add_remove_performance() {
+    use rand::Rng;
+    use rust_colors::{octree_leafy::OctreeLeafy, nn_search_3d::NnSearch3d, points::{ColorPoint, Point, SpacePoint}};
+
+    // Have a tree with several thousand points in it and do many searches to check performance
+    let mut tree = OctreeLeafy::init_tree(3);
+
+    let mut rng = rand::thread_rng();
+    let mut points = Vec::new();
+
+    // Add some to start
+    for i in 0..2000 {
+        let point = Point::new(
+            &SpacePoint::new(i, i), 
+            &ColorPoint::new(rng.gen_range(0..=255), rng.gen_range(0..=255), rng.gen_range(0..=255))
+        );
+        points.push(point.clone());
+        tree.add_sync(point);
+    }
+
+    // Our vector pool
+    let mut spare_vectors = vec![Vec::with_capacity(8); 1024];
+
+    // Add/remove for a while
+    let mut junk = 0;
+    for _ in 0..4096*4096 {
+        // Boring pop random
+        let index = rng.gen_range(0..points.len());
+        let num_points = points.len();
+        points.swap(index, num_points - 1);
+        let point = points.pop().unwrap();
+
+        //tree.remove_sync(point);
+        tree.remove_calculated(tree.precalc_path(point), point, &mut spare_vectors);
+
+        // Add another back
+        let point = Point::new(
+            &SpacePoint::new(rng.gen_range(0..=4095), rng.gen_range(0..=4095)), 
+            &ColorPoint::new(rng.gen_range(0..=255), rng.gen_range(0..=255), rng.gen_range(0..=255))
+        );
+        points.push(point.clone());
+        //tree.add_sync(point);
+        tree.add_calculated(tree.precalc_path(point), point, &mut spare_vectors);
+
+        junk += tree.len() as u64;
+    }
+    println!("Junk: {}", junk);
+}

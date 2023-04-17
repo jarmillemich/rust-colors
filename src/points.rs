@@ -1,4 +1,4 @@
-use std::fmt;
+use std::fmt::{self, Debug};
 
 // #[derive(Clone, Debug, Hash, Eq, PartialEq)]
 // pub struct SpacePoint {
@@ -49,7 +49,7 @@ impl fmt::Display for SpacePoint {
     }
 }
 
-#[derive(Clone, Copy, Debug, Hash, Eq, PartialEq, PartialOrd, Ord)]
+#[derive(Clone, Copy, Hash, Eq, PartialEq, PartialOrd, Ord)]
 pub struct ColorPoint {
     pub r: u8,
     pub g: u8,
@@ -60,6 +60,12 @@ pub struct ColorPoint {
 impl Default for ColorPoint {
     fn default() -> Self {
         Self::new(0, 0, 0)
+    }
+}
+
+impl Debug for ColorPoint {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "Color<{}, {}, {}>", self.r, self.g, self.b)
     }
 }
 
@@ -76,6 +82,7 @@ impl ColorPoint {
         
     }
 
+    /// The distance to another color, squared
     #[inline(never)]
     pub fn distance_to(&self, other: &ColorPoint) -> i32 {
         // let delta = self.channels.sub(other.channels);
@@ -101,7 +108,7 @@ impl fmt::Display for ColorPoint {
     }
 }
 
-#[derive(Clone, Copy, Debug, Hash, Eq, PartialEq, PartialOrd, Ord)]
+#[derive(Clone, Copy, Hash, Eq, PartialEq, PartialOrd, Ord)]
 pub struct Point(u64);
 
 impl Point {
@@ -146,6 +153,18 @@ impl Point {
 
 
 impl fmt::Display for Point {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let (x, y) = self.space().xy();
+        let color = self.color();
+
+        write!(f, "Point<{},{} # {},{},{}>",
+            x, y,
+            color.r, color.g, color.b
+        )
+    }
+}
+
+impl Debug for Point {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         let (x, y) = self.space().xy();
         let color = self.color();

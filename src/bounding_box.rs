@@ -1,6 +1,7 @@
 use std::fmt;
 use crate::points::{self, ColorPoint};
 
+#[derive(Debug)]
 pub struct BoundingBox {
   // Lower RGB bounds
   pub lr: i32,
@@ -30,6 +31,12 @@ impl BoundingBox {
         other.ub <= self.ub && other.lb >= self.lb
     }
 
+    pub fn contains_color(&self, color: &ColorPoint) -> bool {
+        i32::from(color.r) >= self.lr && i32::from(color.r) <= self.ur &&
+        i32::from(color.g) >= self.lg && i32::from(color.g) <= self.ug &&
+        i32::from(color.b) >= self.lb && i32::from(color.b) <= self.ub
+    }
+
     pub fn set_around(&mut self, center: &ColorPoint, radius: i32) {
         assert!(radius > 0, "Tried to set_around with a non-positive radius {radius}");
         
@@ -47,6 +54,26 @@ impl BoundingBox {
         bb.set_around(center, radius);
         bb
     }
+
+    /// Constructs a child of this bounding box for some octree index
+    pub fn sub_for_idx(&self, index: usize, radius: i32) -> BoundingBox {
+        // Subdivision packing is RGB ---, --+, -+-, -++, +--, +-+, ++-, +++
+        assert!(index < 8, "Tried to get sub-bounding box for index {} (must be < 8)", index);
+        assert!(radius > 0, "Tried to get sub-bounding box with a non-positive radius {radius}");
+
+        let rp = index & 0b100 != 0;
+        let gp = index & 0b010 != 0;
+        let bp = index & 0b001 != 0;
+
+
+        let lr = if  rp { self.lr + radius } else { self.lr };
+        let ur = if !rp { self.ur - radius } else { self.ur };
+        let lg = if  gp { self.lg + radius } else { self.lg };
+        let ug = if !gp { self.ug - radius } else { self.ug };
+        let lb = if  bp { self.lb + radius } else { self.lb };
+        let ub = if !bp { self.ub - radius } else { self.ub };
+        BoundingBox { lr, lg, lb, ur, ug, ub }
+    }
 }
 
 impl fmt::Display for BoundingBox {
@@ -56,5 +83,16 @@ impl fmt::Display for BoundingBox {
             self.lg, self.ug,
             self.lb, self.ub,
         )
+    }
+}
+
+impl PartialEq for BoundingBox {
+    fn eq(&self, other: &Self) -> bool {
+        self.lr == other.lr &&
+        self.lg == other.lg &&
+        self.lb == other.lb &&
+        self.ur == other.ur &&
+        self.ug == other.ug &&
+        self.ub == other.ub
     }
 }

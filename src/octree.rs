@@ -1,6 +1,6 @@
 use std::{borrow::Borrow, sync::{Weak, Arc}, ops::Deref};
 
-use crate::{points::{ColorPoint, Point, SpacePoint}, bounding_box::BoundingBox, crashmap::{CrashMap}};
+use crate::{points::{ColorPoint, Point, SpacePoint}, bounding_box::BoundingBox, crashmap::{CrashMap}, nn_search_3d::NnSearch3d};
 use parking_lot::RwLock;
 
 //type OctreeLink = RwLock<Octree>;
@@ -31,7 +31,7 @@ pub struct Octree {
 
 
 struct Search {
-  canidate: Point,
+  candidate: Point,
   source: ColorPoint,
   best_distance_sq: i32,
   bounds: BoundingBox,
@@ -70,74 +70,7 @@ impl Octree {
   //pub fn diameter(&self) -> u8 { 256 >> self.depth }
   pub fn radius(&self) -> i32 { 128 >> self.depth }
 
-  pub fn has(&self, pt: SpacePoint) -> bool {
-    self.points.contains_key(pt)
-  }
-
-  pub fn has_point(&self, pt: &Point) -> bool {
-    self.points.get(&pt.space(), |colors| {
-      colors.read().contains(pt)
-    }).unwrap_or(false)
-  }
-
-  pub fn add(&self, point: Point) {
-    //println!("    Add {point} at {}", self.depth);
-    
-    if self.depth < TREE_TUNING_DEPTH {
-      // Head downwards
-      // NB Probably it is important for thread-ness that we add to our children first?
-      // But what if we add to child, search find, start removing, and we haven't gotten back to the root yet?
-      // TODO add another bitvec for "available" to do the search retry things?
-      self.get_or_create_child(&point.color()).add(point);
-    }
-
-    //println!("Adding {} {} at {} with {} in {}", &point.space, point.color.offset(), self.depth, self.len(), self.bounds);
-
-    // Add the point here
-    self.points.get_or_insert(
-      point.space(),
-      // Grab us some space if we didn't have this list yet
-      #[inline(never)]
-      || {
-        //point_pool.pull()
-        PointBucket(RwLock::new(Vec::with_capacity(4)))
-      },
-      #[inline(never)]
-      move |p| {
-        p.write().push(point);
-      }
-    );
-      
-    assert!(self.len() > 0);
-    
-  }
-
-  pub fn remove(&self, point: Point) {
-    if !self.has_point(&point) {
-      panic!("Removing non-existent point {point}");
-    }
-
-    //println!("Remove {} at {} with {}", point.space, self.depth, self.len());
-
-    // NB we are removing by the spatial component here, so get all the actual points with this
-    // Grab all our Rcs to remove
-    let pts_maybe = self.points.remove(point.space());
-
-    //println!("    Removing {} instances of color {}", pts.borrow().len(), &point.color);
-    if let Some(pts) = pts_maybe {
-      //assert!(self.has_point(point), "Removing from list but not in lookup");
-
-      for rc in pts.read().iter() {
-        // Remove from self
-        self.remove_spec(*rc);
-      }
-    }
-
-    //assert!(!self.point_lookup.contains_key(&point.space), "Tried to remove a point but still present");
-    //assert!(!self.points.contains_key(point), "Tried to remove a point but still present");
-
-    //pts_maybe
-  }
+  
 
   // Like remove but we already have all the color/space info
   fn remove_spec(&self, point: Point) {
@@ -209,58 +142,6 @@ impl Octree {
     let baddr = (color.b as i32 & mask) >> over;
 
     (raddr << 2 | gaddr << 1 | baddr) as usize
-  }
-
-  pub fn find_nearest(&self, color: &ColorPoint) -> Option<Point> {
-    let child = self.get_child(color);
-
-    if self.points.is_empty() {
-      //panic!("Tried to find nearest but no points at depth {0}", self.depth);
-      // Probably this occurs because of threading...
-      return None;
-    }
-
-    let have_search_child = match child {
-      Some(ref c) => !c.as_ref().points.is_empty(),
-      None => false
-    };
-    
-    //println!("Search {color} at {} with {}", self.depth, self.len());
-
-    if self.points.len() <= QUAD_TUNING || !have_search_child {
-      // If we are small or we have no children, search here
-      let ret = self.nearest_in_self(color)?;
-
-      let distance = ret.color().distance_to(color);
-      let radius_sq = self.radius() * self.radius();
-
-      if self.depth > 0 && distance > radius_sq {
-        // The distance to the nearest candidate is bigger than our own radius
-        // Therefore, we need to search our neighbors too
-        let search_radius = f64::from(distance).sqrt().floor() as i32;
-
-        let mut search = Search {
-          canidate: ret,
-          source: color.clone(),
-          best_distance_sq: distance,
-          bounds: BoundingBox::from_around(color, search_radius)
-        };
-
-        search = self.parent.as_ref()
-          .expect("depth > 0 should have a parent")
-          .upgrade()
-          .expect("depth > 0 should have a non-deleted parent")
-          .as_ref()
-          .borrow()
-          .nn_search_up(search, self.ptr.read().upgrade().expect("should have self"))?;
-
-        return Some(search.canidate);
-      }
-
-      Some(ret)
-    } else {
-      child?.as_ref().borrow().find_nearest(color)
-    }
   }
 
   fn nearest_in_self(&self, color: &ColorPoint) -> Option<Point> {
@@ -340,7 +221,7 @@ impl Octree {
 
       if nearest_dist < search.best_distance_sq {
         // New candidate!
-        search.canidate = our_nearest;
+        search.candidate = our_nearest;
         search.best_distance_sq = nearest_dist;
         search.bounds.set_around(&search.source, f64::from(nearest_dist).sqrt().floor() as i32);
       }
@@ -357,11 +238,144 @@ impl Octree {
     Some(search)
   }
 
-  pub fn len(&self) -> usize {
+  
+}
+
+impl NnSearch3d for Octree {
+  fn len(&self) -> usize {
     self.points.len()
   }
 
-  pub fn is_empty(&self) -> bool {
+  fn is_empty(&self) -> bool {
     self.points.is_empty()
+  }
+
+  fn has(&self, pt: SpacePoint) -> bool {
+    self.points.contains_key(pt)
+  }
+
+  fn has_point(&self, pt: &Point) -> bool {
+    self.points.get(&pt.space(), |colors| {
+      colors.read().contains(pt)
+    }).unwrap_or(false)
+  }
+
+  fn add(&self, point: Point) {
+    //println!("    Add {point} at {}", self.depth);
+    
+    if self.depth < TREE_TUNING_DEPTH {
+      // Head downwards
+      // NB Probably it is important for thread-ness that we add to our children first?
+      // But what if we add to child, search find, start removing, and we haven't gotten back to the root yet?
+      // TODO add another bitvec for "available" to do the search retry things?
+      self.get_or_create_child(&point.color()).add(point);
+    }
+
+    //println!("Adding {} {} at {} with {} in {}", &point.space, point.color.offset(), self.depth, self.len(), self.bounds);
+
+    // Add the point here
+    self.points.get_or_insert(
+      point.space(),
+      // Grab us some space if we didn't have this list yet
+      #[inline(never)]
+      || {
+        //point_pool.pull()
+        PointBucket(RwLock::new(Vec::with_capacity(4)))
+      },
+      #[inline(never)]
+      move |p| {
+        p.write().push(point);
+      }
+    );
+      
+    assert!(self.len() > 0);
+    
+  }
+
+  fn add_sync(&mut self, point: Point) {
+    self.add(point);
+  }
+
+  fn remove(&self, point: Point) {
+    if !self.has_point(&point) {
+      panic!("Removing non-existent point {point}");
+    }
+
+    //println!("Remove {} at {} with {}", point.space, self.depth, self.len());
+
+    // NB we are removing by the spatial component here, so get all the actual points with this
+    // Grab all our Rcs to remove
+    let pts_maybe = self.points.remove(point.space());
+
+    //println!("    Removing {} instances of color {}", pts.borrow().len(), &point.color);
+    if let Some(pts) = pts_maybe {
+      //assert!(self.has_point(point), "Removing from list but not in lookup");
+
+      for rc in pts.read().iter() {
+        // Remove from self
+        self.remove_spec(*rc);
+      }
+    }
+
+    //assert!(!self.point_lookup.contains_key(&point.space), "Tried to remove a point but still present");
+    //assert!(!self.points.contains_key(point), "Tried to remove a point but still present");
+
+    //pts_maybe
+  }
+
+  fn remove_sync(&mut self, point: Point) {
+    self.remove(point);
+  }
+
+  fn find_nearest(&self, color: &ColorPoint) -> Option<Point> {
+    let child = self.get_child(color);
+
+    if self.points.is_empty() {
+      //panic!("Tried to find nearest but no points at depth {0}", self.depth);
+      // Probably this occurs because of threading...
+      return None;
+    }
+
+    let have_search_child = match child {
+      Some(ref c) => !c.as_ref().points.is_empty(),
+      None => false
+    };
+    
+    //println!("Search {color} at {} with {}", self.depth, self.len());
+
+    if self.points.len() <= QUAD_TUNING || !have_search_child {
+      // If we are small or we have no children, search here
+      let ret = self.nearest_in_self(color)?;
+
+      let distance = ret.color().distance_to(color);
+      let radius_sq = self.radius() * self.radius();
+
+      if self.depth > 0 && distance > radius_sq {
+        // The distance to the nearest candidate is bigger than our own radius
+        // Therefore, we need to search our neighbors too
+        let search_radius = f64::from(distance).sqrt().floor() as i32;
+
+        let mut search = Search {
+          candidate: ret,
+          source: color.clone(),
+          best_distance_sq: distance,
+          bounds: BoundingBox::from_around(color, search_radius)
+        };
+
+        search = self.parent.as_ref()
+          .expect("depth > 0 should have a parent")
+          .upgrade()
+          .expect("depth > 0 should have a non-deleted parent")
+          .as_ref()
+          .borrow()
+          .nn_search_up(search, self.ptr.read().upgrade().expect("should have self"))?;
+
+        return Some(search.candidate);
+      }
+
+      Some(ret)
+    } else {
+      child?.as_ref().borrow().find_nearest(color)
+    }
   }
 }

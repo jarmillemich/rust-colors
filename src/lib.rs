@@ -1,6 +1,8 @@
 pub mod points;
 pub mod bounding_box;
+pub mod nn_search_3d;
 pub mod octree;
+pub mod octree_leafy;
 pub mod color_generator;
 pub mod atomicbitmask;
 pub mod image;

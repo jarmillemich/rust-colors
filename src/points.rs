@@ -121,10 +121,12 @@ impl Point {
         )
     }
 
+    #[inline(never)]
     pub fn space(&self) -> SpacePoint {
         SpacePoint((self.0 & 0xffffffff) as u32)
     }
 
+    #[inline(never)]
     pub fn color(&self) -> ColorPoint {
         let r = ((self.0 >> 32) & 0xff) as u8;
         let g = ((self.0 >> 40) & 0xff) as u8;

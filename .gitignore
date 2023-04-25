@@ -2,4 +2,4 @@
 *.png
 
 perf.*
-flamegraph.svg
+flamegraph*.svg

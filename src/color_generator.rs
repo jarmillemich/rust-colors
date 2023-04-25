@@ -1,30 +1,38 @@
-use std::sync::{Arc, RwLock};
-use std::sync::atomic::{AtomicUsize, Ordering, AtomicU64};
+use std::collections::HashMap;
+use std::sync::{Arc, mpsc};
 use std::thread;
-use std::time::{Instant, Duration};
+use std::time::{Instant};
 use std::{path::Path};
 use std::fs::File;
 use std::io::BufWriter;
+use log::{trace};
+
+use bitvec::prelude::*;
+use spmc::Receiver;
 
 
 use crate::image::Image;
 use crate::nn_search_3d::NnSearch3d;
-use crate::{points::{ColorPoint, SpacePoint, Point}, octree::Octree, bounding_box::BoundingBox,atomicbitmask::AtomicBitMask};
+use crate::octree_leafy::OctreeLeafy;
+use crate::{points::{ColorPoint, SpacePoint, Point}};
 
 type SpacePoints = Box<Vec<SpacePoint>>;
 
 pub struct ColorGenerator {
   colors: Vec<ColorPoint>,
   spaces: SpacePoints,
-  writing_spaces: AtomicBitMask,
-  written_spaces: AtomicBitMask,
-  avail_spaces: AtomicBitMask,
-  root: Arc<Octree>,
+  writing_spaces: Box<[usize]>,
+  written_spaces: Box<[usize]>,
+  root: Arc<OctreeLeafy>,
   image: Image,
-  current_color_idx: AtomicUsize,
+  current_color_idx: usize,
+  space_mapping: HashMap<SpacePoint, Vec<ColorPoint>>,
 }
 
-
+fn make_boxed_bit_array() -> Box<[usize]> {
+  // Silliness to start it on the heap
+  vec![0usize; 4096 * 4096 / std::mem::size_of::<usize>()].into_boxed_slice()
+}
 
 // Public things
 impl ColorGenerator {
@@ -32,12 +40,13 @@ impl ColorGenerator {
     ColorGenerator {
       colors: initialize_color_space(),
       spaces: initialize_space_space(),
-      current_color_idx: AtomicUsize::new(0),
+      current_color_idx: 0,
       image: Image::new(),
-      writing_spaces: AtomicBitMask::new(4096*4096),
-      written_spaces: AtomicBitMask::new(4096*4096),
-      avail_spaces: AtomicBitMask::new(4096*4096),
-      root: Octree::new(None, 0, 0, BoundingBox::new(0, 0, 0, 255, 255, 255)),
+      writing_spaces: make_boxed_bit_array(),
+      written_spaces: make_boxed_bit_array(),
+      //root: Octree::new(None, 0, 0, BoundingBox::new(0, 0, 0, 255, 255, 255)),
+      root: OctreeLeafy::init_tree(3).into(),
+      space_mapping: HashMap::new(),
     }
   }
 
@@ -46,233 +55,325 @@ impl ColorGenerator {
     fastrand::shuffle(&mut self.colors);
   }
 
-  pub fn add_next_seed_pixel(&self, x: u32, y: u32) {
-    let color = &self.colors[self.current_color_idx.fetch_add(1, Ordering::SeqCst)];
+  pub fn add_next_seed_pixel(&mut self, x: u32, y: u32, point_pool: &mut Vec<Vec<Point>>) {
+    let color = self.colors[self.current_color_idx].clone();
+    self.current_color_idx += 1;
     let ofs = space_offset(x, y);
 
     println!("Seed is {ofs}");
 
-    if self.writing_spaces.test_and_set(ofs) || self.written_spaces.test_and_set(ofs) {
+    if self.writing_spaces.view_bits::<Msb0>()[ofs] || self.written_spaces.view_bits::<Msb0>()[ofs] {
       panic!("Seeded already written point");
     }
 
+    self.writing_spaces.view_bits_mut::<Msb0>().set(ofs, true);
+    self.written_spaces.view_bits_mut::<Msb0>().set(ofs, true);
+
     // Write out the pixel
-    let space = &self.spaces[ofs];
-    self.image.write(space, color);
+    let space = self.spaces[ofs].clone();
+    self.image.write(&space, &color);
 
-    // Add our intial neighbors
+    // Add our initial neighbors
     let mut add_vec = Vec::with_capacity(4);
-    self.add_neighbors(space, color, &mut add_vec);
+    self.add_neighbors(&space, &color, &mut add_vec, point_pool);
 
-    // Mark as ready for the workers
-    self.avail_spaces.test_and_set(color.offset());
-
-    //self.root.add(Arc::new(Point { color: color.clone(), space: ofs }));
-    
   }
 
-  fn add_neighbors(&self, space: &SpacePoint, color: &ColorPoint, add_vec: &mut Vec<SpacePoint>) {
+  fn add_neighbors(&mut self, space: &SpacePoint, color: &ColorPoint, add_vec: &mut Vec<SpacePoint>, point_pool: &mut Vec<Vec<Point>>) {
     space.get_neighbors(add_vec);
     for neighbor in add_vec {
-      if self.written_spaces.test(neighbor.offset()) || self.writing_spaces.test(neighbor.offset()) {
+      if self.written_spaces.view_bits::<Msb0>()[neighbor.offset()] || self.writing_spaces.view_bits::<Msb0>()[neighbor.offset()] {
+        // Already occupied
         continue;
       } else {
-        let new_point: Point = Point::new(&neighbor, color);
+        let new_point = Point::new(&neighbor, color);
 
-        // XXX Are we a bad person for this?
-        if !self.writing_spaces.test_and_set(neighbor.offset()) {
-          self.root.add(new_point);
-          assert!(self.writing_spaces.clear(neighbor.offset()), "Somebody cleared our lock");
-        } else {
-          //println!("We probably just saved your life!");
-        }
+        self.space_mapping.entry(neighbor.clone()).or_insert(Vec::new()).push(color.clone());
+        println!("Adding {new_point} (seed)");
+        self.root.add(new_point, point_pool)
       }
     }
   }
 
-  /// Attempts to locate the next point to paint to.
-  /// Attempts to do this in a thread safe way, reporting potential collisions to color_miss and collision_miss for diagnostics
-  fn find_next_point<
-    F1 : Fn(Point),
-    F2 : Fn(Point)
-  >(&self, at: &ColorPoint, color_miss: F1, collision_miss: F2) -> Point {
-    loop {
-      // Wait for somebody to populate another point
-      if self.root.len() == 0 {
-        thread::sleep(Duration::from_millis(1));
-        continue;
-      }
 
-      // Perform the search
-      // IMPORTANT: This function may return points that are not fully written yet, or have also been found by somebody else
-      // ALSO IMPORTANT: With the new threading impl, somebody might remove a point as we are searching to it, try again for this
-      let next = self.root.find_nearest(at);
-        //.expect("Tried to add a pixel but there were none to grow on");
+  pub fn grow_pixels_to(&mut self, pixel_count: usize) {
 
-      // println!("Found {}", match &next {
-      //   None => format!("None"),
-      //   Some(p) => format!("{}", p.space)
-      // });
 
-      let next = match next {
-        None => continue,
-        Some(n) => n
-      };
-
-      // Don't take if not fully available yet, somebody else might still be working on adding it
-      if !self.avail_spaces.test(next.color().offset()) { 
-        color_miss(next);
-        continue;
-      }
-
-      if !self.root.has_point(&next) {
-        //println!("Partial color miss?");
-        continue;
-      }
-
-      // Don't take something somebody else has already claimed, e.g. if we search it up at the same time
-      // Note this will atomically claim the point if it is not already
-      if !self.writing_spaces.test_and_set(next.space().offset()) { 
-        assert!(!self.written_spaces.test(next.space().offset()), "Marked written but found in search");
-        break next; 
-      }
-      
-
-      // Somebody else is already writing to this space, tally it and try again later
-      collision_miss(next);
-    }
-  }
-
-  pub fn grow_pixels_to(self_src: &Arc<RwLock<Self>>, pixel_count: usize) {
+    // FUTURE so the new plan is to have a bunch of search threads and mutation threads
+    // search threads will search for the next point to mutate, and then send it to the main thread
+    // The main thread gatekeeps items from the search threads, so points are only dispatched once
+    // The main thread dispatches ok points to the mutation threads on a spmc so they can grab some when available
+    // Worker threads also report their performance metrics somehow???
+    // Just gotta keep the book-keeping performant
     
-    if self_src.read().unwrap().current_color_idx.load(Ordering::SeqCst) == 0 {
+    if self.current_color_idx == 0 {
       panic!("Tried to call grow_pixels_to without any seed pixels");
     }
 
-    println!("Start of the party with {} existing", self_src.read().unwrap().root.len());
+    println!("Start of the party with {} existing", self.root.len());
 
-    let search_time_src = Arc::new(AtomicU64::default());
-    let place_time_src = Arc::new(AtomicU64::default());
-    let remove_time_src = Arc::new(AtomicU64::default());
-    let add_time_src = Arc::new(AtomicU64::default());
-    let color_misses_src = Arc::new(AtomicU64::default());
-    let collision_misses_src = Arc::new(AtomicU64::default());
+    // Diagnostic timers, these are all in microseconds
+    let mut search_time_src: usize = 0;
+    let mut place_time_src: usize = 0;
+    let mut remove_time_src: usize = 0;
+    let mut add_time_src: usize = 0;
+    let color_misses_src: usize = 0;
+    let mut collision_misses_src: usize = 0;
 
-    let wall_start_time = Arc::new(Instant::now());
-    
-    let mut handles = vec![];
-    for thread_id in 0..16 {
+    let wall_start_time = Instant::now();
 
-      let selfish_src = Arc::clone(self_src);
-      
-      let search_time = Arc::clone(&search_time_src);
-      let place_time = Arc::clone(&place_time_src);
-      let remove_time = Arc::clone(&remove_time_src);
-      let add_time = Arc::clone(&add_time_src);
-      let color_misses = Arc::clone(&color_misses_src);
-      let collision_misses = Arc::clone(&collision_misses_src);
 
-      let my_writes = AtomicBitMask::new(4096*4096);
-      let my_wall = Arc::clone(&wall_start_time);
-      
-      let handle = thread::Builder::new().name(format!("Worker {}", thread_id)).spawn(move || {
+    // Search threads
+    let num_search_threads = 4;
+    let mut search_handles = vec![];
+    // For sending colors to the search threads
+    let (mut tx_search_send, rx_search_send) = spmc::channel();
+    // For receiving search results from the search threads
+    let (tx_search_receive, rx_search_receive) = mpsc::channel();
 
-        let selfish = selfish_src.read().unwrap();
-        let mut add_vec = Vec::with_capacity(4);
+    // Mutation threads
+    let num_mutation_threads = 1;
+    let mut mutation_handles = vec![];
+    // For sending results to the mutation threads
+    let (mut tx_mutation_send, rx_mutation_send) = spmc::channel();
+    // Just for stats atm
+    let (tx_mutation_receive, rx_mutation_receive) = mpsc::channel();
+
+    // Spawn the search threads
+    for thread_id in 0..num_search_threads {
+      let rx_search_send = rx_search_send.clone();
+      let tx_search_receive = tx_search_receive.clone();
+      let root = self.root.clone();
+
+      search_handles.push(thread::Builder::new().name(format!("Searcher {}", thread_id)).spawn(move || {
+        let mut backfill = Vec::with_capacity(32);
         
         loop {
-          let i = selfish.current_color_idx.fetch_add(1, Ordering::SeqCst);
-          if i >= pixel_count {
-            // All done
-            return;
+          // Get the next color to search for
+          let color = if backfill.is_empty() {
+            // If no backfill block on our receiver
+            let Some(next) = rx_search_send.recv().ok() else {
+              // If the receiver is empty, we're out of work
+              println!("Search thread {} exiting, out of work", thread_id);
+              break;
+            };
+
+            next
+          } else {
+            // If we do have some backfill, try the receiver first but then use the backfill
+            let Some(next) = rx_search_send.try_recv().ok().or_else(|| backfill.pop()) else {
+              continue;
+            };
+
+            next
+          };
+
+          // Search for the next point
+          // NB find_nearest will return None if a point was removed during our search
+          let start = Instant::now();
+          let next = root.find_nearest(&color);
+          let end = Instant::now();
+          let search_time = end.duration_since(start).as_micros() as usize;
+
+          match next {
+            Some(next) => {
+              // We found a point, send it to the main thread
+              tx_search_receive.send((color, next, search_time)).unwrap();
+            },
+            None => {
+              // We didn't find a point, put it back in the backfill
+              //println!("Search thread {} backfilling color {} with {}", thread_id, color, backfill.len());
+              backfill.push(color);
+            }
           }
-
-          // Diagnostics printing
-          if i & 262143 == 0 {
-            // Progress
-            let time_so_far = my_wall.elapsed().as_micros();
-            let time_per_px = time_so_far as f64 / i as f64;
-            let remaining = time_per_px * (4096 * 4096 - i) as f64;
-
-            println!("Adding pixel {i} ({:.1}%), wf = {}, s={}, p={}, r={}, add={}, mr={} mw={}, ETA={:.2}/{:.2}s as {:.2} kpx/s",
-              100.0 * (i as f64) / 4096.0 / 4096.0,
-              selfish.root.len(),
-              search_time.load(Ordering::Relaxed) / 1000,
-              place_time.load(Ordering::Relaxed) / 1000,
-              remove_time.load(Ordering::Relaxed) / 1000,
-              add_time.load(Ordering::Relaxed) / 1000,
-              color_misses.load(Ordering::Relaxed),
-              collision_misses.load(Ordering::Relaxed),
-              remaining / 1000.0 / 1000.0,
-              (remaining + time_so_far as f64) / 1000.0 / 1000.0,
-              1000.0 / time_per_px,
-              
-            );
-          }
-          
-          let at = &selfish.colors[i];
-
-          // Find something we can claim!
-          let next = timed(&search_time, || selfish.find_next_point(at,
-            |candidate| {
-              let last_misses = color_misses.fetch_add(1, Ordering::Relaxed);
-              if last_misses & 65535 == 0 { println!("Read misses: {last_misses} {} {} {}", candidate.space(), at, candidate.color()); }
-              //println!("Read misses: {last_misses} {} {} {}", candidate.space, at, candidate.color);
-            }, |candidate| {
-              if my_writes.test(candidate.space().offset()) {
-                // So what, we failed to remove one we visited?
-                panic!("Search returned point that this thread previously wrote");
-              }
-
-              let last_misses = collision_misses.fetch_add(1, Ordering::Relaxed);
-              if last_misses & 65535 == 0 { println!("Write misses: {last_misses}/{i}/{}/{} -> {}, of {} in {thread_id}", candidate.space(), at, candidate.color(), 0); }
-              // if last_misses > 1024 * 1024 {
-              //   panic!("Probably dead");
-              // }
-            })
-          );
-
-          assert!(!my_writes.test_and_set(next.space().offset()), "Local double write");
-
-          // Write this pixel
-          let space = timed(&place_time, || {
-            let space = &selfish.spaces[next.space().offset()];
-            selfish.image.write(space, at);
-            space
-          });
-          
-          // Remove this pixel from the tree
-          timed(&remove_time, || {
-            selfish.root.remove(next);
-          });
-
-          
-          
-
-          // Sanity
-          // assert!(!selfish.root.has(next.space), "Called remove but still present");
-          // assert!(!selfish.root.has_point(&next), "Called remove but still present");
-
-          // Add the color as an option on our neighbors
-          timed(&add_time, || {
-            selfish.add_neighbors(space, at, &mut add_vec)
-          });
-          
-          // Mark write as completed
-          assert!(!selfish.written_spaces.test_and_set(next.space().offset()), "double space write");
-          // Mark colors as available
-          assert!(!selfish.avail_spaces.test_and_set(at.offset()), "double color write");
-          
-        };
-      }).unwrap();
-
-      //handle.join().unwrap();
-
-
-      handles.push(handle);
+        }
+      }).unwrap());
     }
 
-    for handle in handles {
+    // Spawn the mutation threads
+    for thread_id in 0..num_mutation_threads {
+      let rx_mutation_send: Receiver<(Vec<Point>, Vec<Point>)> = rx_mutation_send.clone();
+      let tx_mutation_receive = tx_mutation_receive.clone();
+      let root = self.root.clone();
+
+      mutation_handles.push(thread::Builder::new().name(format!("Mutator {}", thread_id)).spawn(move || {
+
+        // Our own point pool
+        let mut point_pool = vec![Vec::with_capacity(8); 1024];
+
+        loop {
+          // Wait for a result to mutate
+          let Ok((removals, additions)) = rx_mutation_send.recv() else {
+            println!("Mutation thread {} exiting, out of work", thread_id);
+            break;
+          };
+
+          //println!("Mutation thread {} got {} removals and {} additions", thread_id, removals.len(), additions.len());
+
+          // Remove removals
+          let removal_start = Instant::now();
+          for removal in removals {
+            root.remove(removal, &mut point_pool);
+          }
+          let removal_duration = removal_start.elapsed().as_micros() as usize;
+
+          // Add additions
+          let addition_start = Instant::now();
+          for addition in additions {
+            root.add(addition, &mut point_pool);
+          }
+          let addition_duration = addition_start.elapsed().as_micros() as usize;
+
+          tx_mutation_receive.send((removal_duration, addition_duration)).unwrap();
+        }
+      }).unwrap());
+    }
+
+    let mut outstanding = 0;
+    let mut color_collisions = Vec::new();
+
+    // Basically just start dispatching work and updating stats
+    while self.current_color_idx < pixel_count || outstanding > 0 || !color_collisions.is_empty() {
+
+      // Dispatch a handful of colors
+      if outstanding < self.space_mapping.len() + 16 && self.current_color_idx < pixel_count {
+        for _ in 0..16 {
+          
+          // Take either one of our collisions or the next color
+          let color = color_collisions.pop().map(|c| {
+            trace!("Dispatching {c} from collision list");
+            c
+          }).unwrap_or_else(|| {
+            let color_idx = self.current_color_idx;
+            self.current_color_idx += 1;
+            let c = self.colors[color_idx];
+            trace!("Dispatching {c} from color list");
+
+            // Diagnostics printing
+            if self.current_color_idx & 262143 == 0 {
+              // Progress
+              let i = self.current_color_idx;
+              let time_so_far = wall_start_time.elapsed().as_micros();
+              let time_per_px = time_so_far as f64 / i as f64;
+              let remaining = time_per_px * (4096 * 4096 - i) as f64;
+
+              println!("Adding pixel {i} ({:.1}%), wf = {}, s={}, p={}, r={}, add={}, mr={} mw={}, ETA={:.2}/{:.2}s as {:.2} kpx/s",
+                100.0 * (i as f64) / 4096.0 / 4096.0,
+                self.root.len(),
+                search_time_src / 1000,
+                place_time_src / 1000,
+                remove_time_src / 1000,
+                add_time_src / 1000,
+                color_misses_src,
+                collision_misses_src,
+                remaining / 1000.0 / 1000.0,
+                (remaining + time_so_far as f64) / 1000.0 / 1000.0,
+                1000.0 / time_per_px,
+                
+              );
+            }
+
+            c
+          });
+
+          tx_search_send.send(color).unwrap();
+          outstanding += 1;
+
+          if self.current_color_idx >= pixel_count {
+            // Reached the end in this batch
+            break;
+          }
+
+          
+        }
+      } else if !color_collisions.is_empty() && outstanding < self.space_mapping.len() {
+        // Oops gotta dispatch these still
+        for _ in 0..16 {
+          if let Some(color) = color_collisions.pop() {
+            tx_search_send.send(color).unwrap();
+            outstanding += 1;
+          }
+        }
+      }
+
+      // Get any search results and verify they can be used
+      for (color, result, search_time) in rx_search_receive.try_iter() {
+        outstanding -= 1;
+
+        trace!("  Search found {result} for {color}");
+
+        if self.writing_spaces.view_bits::<Msb0>()[result.space().0 as usize] {
+          // Already written
+          // TODO Need to re-dispatch this somehow
+          trace!("    Color {} collided at {} with {} total collisions", color, result.space(), color_collisions.len());
+          collision_misses_src += 1;
+          // if collision_misses_src > 1000 {
+          //   println!("Have {} in the space mapping here", self.space_mapping.get(&result.space()).map(|m| m.len()).unwrap_or(0));
+
+          //   panic!("Too many collisions");
+          // }
+          color_collisions.push(color);
+          continue;
+        }
+
+        // Mark as writing
+        self.writing_spaces.view_bits_mut::<Msb0>().set(result.space().0 as usize, true);
+
+        // Paint it
+        let start = Instant::now();
+        self.image.write(&result.space(), &color);
+        let paint_duration = start.elapsed().as_micros() as usize;
+        place_time_src += paint_duration;
+
+        // Dispatch the result to a mutation thread
+        // TODO should we batch these up?
+        let to_remove = self.space_mapping.remove(&result.space()).expect("Should have a found point in our global mapping");
+        let removals = to_remove.iter().map(|color| Point::new(&result.space(), color)).collect();
+
+        let mut additions = vec![];
+        result.space().get_neighbors(&mut additions);
+        // Attach to the color we placed
+        // XXX is that right?
+        // TODO also probably avoid these rematerializations?
+        let additions: Vec<_> = additions
+          .iter()
+          .filter(|space| !self.writing_spaces.view_bits::<Msb0>()[space.0 as usize])
+          .map(|space| Point::new(space, &color))
+          .collect();
+
+        // Keep track in our space->color map
+        for addition in &additions {
+          self.space_mapping.entry(addition.space()).or_insert(Vec::new()).push(addition.color());
+        }
+
+        for r in &removals { trace!("    Removing {r} because we found {result}"); }
+        for a in &additions { trace!("    Adding {a} because it is next to {result}"); }
+
+        tx_mutation_send.send((removals, additions)).unwrap();
+
+        // Update stats
+        search_time_src += search_time;
+      }
+
+      // Get any mutation results and update stats
+      for (removal_time, addition_time) in rx_mutation_receive.try_iter() {
+        remove_time_src += removal_time;
+        add_time_src += addition_time;
+      }
+
+      
+    }
+
+    // Drop our send handles to signal the gig is up
+    drop(tx_search_send);
+    drop(tx_mutation_send);
+
+    // Wait for everybody to finish
+    for handle in search_handles {
+      handle.join().unwrap();
+    }
+
+    for handle in mutation_handles {
       handle.join().unwrap();
     }
   }
@@ -301,14 +402,6 @@ impl ColorGenerator {
     let raw = self.image.to_raw();
     writer.write_image_data(raw.as_ref()).unwrap(); // Save
   }
-}
-
-
-fn timed<T, F: FnMut() -> T>(timer: &Arc<AtomicU64>, mut task: F) -> T {
-  let start = Instant::now();
-  let ret = task();
-  timer.fetch_add(start.elapsed().as_micros() as u64, Ordering::Relaxed);
-  ret
 }
 
 /// Sets up our list of colors and color pointers

@@ -10,12 +10,12 @@ fn main() {
     
     println!("Starting");
 
-    let whatever = Arc::new(RwLock::new(ColorGenerator::new()));
+    let mut generator = Box::new(ColorGenerator::new());
 
     let elapsed = start.elapsed();
     println!("Init Generator at {}", elapsed.as_millis());
 
-    whatever.write().unwrap().shuffle_colors();
+    generator.shuffle_colors();
     let elapsed = start.elapsed();
     println!("Shuffle at {}", elapsed.as_millis());
 
@@ -23,15 +23,16 @@ fn main() {
     // whatever.read().unwrap().add_next_seed_pixel(3072, 1024);
     // whatever.read().unwrap().add_next_seed_pixel(1024, 3072);
     // whatever.read().unwrap().add_next_seed_pixel(3072, 3072);
-    whatever.read().unwrap().add_next_seed_pixel(2048, 2048);
+    generator.add_next_seed_pixel(2048, 2048, &mut Vec::with_capacity(4));
     let elapsed = start.elapsed();
     println!("Add seed at {}", elapsed.as_millis());
 
-    ColorGenerator::grow_pixels_to(&whatever, 4096*4096);
+    generator.grow_pixels_to(4096*4096);
+    // generator.grow_pixels_to(16*4096);
     let elapsed = start.elapsed();
     println!("Grown at {}", elapsed.as_millis());
 
-    whatever.read().unwrap().write_image(&String::from("./test.png"));
+    generator.write_image(&String::from("./test.png"));
     let elapsed = start.elapsed();
     println!("Wrote at {}", elapsed.as_millis());
 
@@ -45,6 +46,7 @@ fn test_octree_search_performance() {
 
     // Have a tree with several thousand points in it and do many searches to check performance
     let mut tree = OctreeLeafy::init_tree(3);
+    let mut spare_vectors = Vec::new();
 
     let mut rng = rand::thread_rng();
 
@@ -53,7 +55,7 @@ fn test_octree_search_performance() {
             &SpacePoint::new(i, i), 
             &ColorPoint::new(rng.gen_range(0..=255), rng.gen_range(0..=255), rng.gen_range(0..=255))
         );
-        tree.add_sync(point);
+        tree.add_sync(point, &mut spare_vectors);
     }
 
     // Search random points
@@ -75,6 +77,7 @@ fn test_octree_add_remove_performance() {
 
     // Have a tree with several thousand points in it and do many searches to check performance
     let mut tree = OctreeLeafy::init_tree(3);
+    let mut spare_vectors = Vec::new();
 
     let mut rng = rand::thread_rng();
     let mut points = Vec::new();
@@ -86,7 +89,7 @@ fn test_octree_add_remove_performance() {
             &ColorPoint::new(rng.gen_range(0..=255), rng.gen_range(0..=255), rng.gen_range(0..=255))
         );
         points.push(point.clone());
-        tree.add_sync(point);
+        tree.add_sync(point, &mut spare_vectors);
     }
 
     // Our vector pool

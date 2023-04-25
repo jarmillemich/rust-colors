@@ -260,7 +260,7 @@ impl NnSearch3d for Octree {
     }).unwrap_or(false)
   }
 
-  fn add(&self, point: Point) {
+  fn add(&self, point: Point, spare_vectors: &mut Vec<Vec<Point>>) {
     //println!("    Add {point} at {}", self.depth);
     
     if self.depth < TREE_TUNING_DEPTH {
@@ -268,7 +268,7 @@ impl NnSearch3d for Octree {
       // NB Probably it is important for thread-ness that we add to our children first?
       // But what if we add to child, search find, start removing, and we haven't gotten back to the root yet?
       // TODO add another bitvec for "available" to do the search retry things?
-      self.get_or_create_child(&point.color()).add(point);
+      self.get_or_create_child(&point.color()).add(point, spare_vectors);
     }
 
     //println!("Adding {} {} at {} with {} in {}", &point.space, point.color.offset(), self.depth, self.len(), self.bounds);
@@ -292,11 +292,11 @@ impl NnSearch3d for Octree {
     
   }
 
-  fn add_sync(&mut self, point: Point) {
-    self.add(point);
+  fn add_sync(&mut self, point: Point, spare_vectors: &mut Vec<Vec<Point>>) {
+    self.add(point, spare_vectors);
   }
 
-  fn remove(&self, point: Point) {
+  fn remove(&self, point: Point, spare_vectors: &mut Vec<Vec<Point>>) {
     if !self.has_point(&point) {
       panic!("Removing non-existent point {point}");
     }
@@ -323,8 +323,8 @@ impl NnSearch3d for Octree {
     //pts_maybe
   }
 
-  fn remove_sync(&mut self, point: Point) {
-    self.remove(point);
+  fn remove_sync(&mut self, point: Point, spare_vectors: &mut Vec<Vec<Point>>) {
+    self.remove(point, spare_vectors);
   }
 
   fn find_nearest(&self, color: &ColorPoint) -> Option<Point> {

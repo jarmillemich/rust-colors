@@ -1,12 +1,11 @@
-use std::sync::{Arc, atomic::{AtomicUsize, Ordering}};
+use std::{sync::{Arc, atomic::{AtomicUsize, Ordering}}};
 
+use integer_sqrt::IntegerSquareRoot;
 use parking_lot::RwLock;
-use rand::seq::SliceRandom;
 
 use crate::{points::{SpacePoint, Point, ColorPoint}, bounding_box::BoundingBox, nn_search_3d::NnSearch3d};
 
-type HashMap<K, V> = fnv::FnvHashMap<K, V>;
-type LeafBucket = HashMap<SpacePoint, Vec<Point>>;
+type LeafBucket = Vec<Point>;
 type LeafBucketWrapper = Arc<RwLock<LeafBucket>>;
 
 /*
@@ -49,7 +48,7 @@ impl OctreeLeafy {
     fn init_node(depth: usize, remaining_depth: usize, bounding_box: BoundingBox) -> OctreeLeafy {
         if remaining_depth == 0 {
             OctreeLeafy::Leaf {
-                points: Arc::new(RwLock::new(HashMap::default())),
+                points: Arc::new(RwLock::new(Vec::new())),
                 bounds: bounding_box,
                 total_points: AtomicUsize::new(0),
             }
@@ -91,19 +90,7 @@ impl OctreeLeafy {
         (addr_red << 2 | addr_green << 1 | addr_blue) as usize
     }
 
-    fn child_for(&mut self, color: &ColorPoint) -> Option<&mut OctreeLeafy> {
-        match self {
-            OctreeLeafy::Node { children, depth, .. } => {
-                let addr = Self::addr(*depth, color);
-                Some(&mut children[addr])
-            }
-            OctreeLeafy::Leaf { .. } => {
-                None
-            }
-        }
-    }
-
-    fn child_for_shared(&self, color: &ColorPoint) -> Option<&OctreeLeafy> {
+    fn child_for(&self, color: &ColorPoint) -> Option<&OctreeLeafy> {
         match self {
             OctreeLeafy::Node { children, depth, .. } => {
                 let addr = Self::addr(*depth, color);
@@ -127,9 +114,8 @@ impl OctreeLeafy {
                     .find_map(|child| child.first_point())
             }
             OctreeLeafy::Leaf { points, .. } => {
-                points.read().values()
-                    .next()
-                    .and_then(|points| points.first())
+                points.read()
+                    .first()
                     .cloned()
             }
         }
@@ -175,35 +161,35 @@ impl OctreeLeafy {
         // If we have some equal points, choose a random one?
         // let mut candidates = Vec::with_capacity(4);
 
-        //for point in points.read().values().flatten() {
-        for bucket in points.read().values() {
-            for point in bucket {
-                if !search.bounds.contains_color(&point.color()) {
-                    // Quickly exclude if outside the search area
-                    continue;
-                }
+        for point in points.read().iter() {
 
-                let dist = point.color().distance_to(pt);
+            if !search.bounds.contains_color(point.color()) {
+                // Quickly exclude if outside the search area
+                continue;
+            }
 
-                if dist == 0 {
-                    // This is it
-                    search.nearest = point.clone();
-                    search.nearest_dist = 0;
-                    return;
-                }
+            let dist = point.color().distance_to(pt);
 
-                if dist == search.nearest_dist {
-                    // candidates.push(point.clone());
-                }
+            if dist == 0 {
+                // This is it
+                search.nearest.clone_from(point);
+                search.nearest_dist = 0;
+                return;
+            }
 
-                if dist < search.nearest_dist {
-                    search.nearest = point.clone();
-                    search.nearest_dist = dist;
-                    search.bounds.set_around(pt, f64::from(search.nearest_dist).sqrt().floor() as i32);
+            if dist == search.nearest_dist {
+                // candidates.push(point.clone());
+            }
 
-                    // candidates.clear();
-                    // candidates.push(point.clone());
-                }
+            if dist < search.nearest_dist {
+                search.nearest.clone_from(point);
+                search.nearest_dist = dist;
+                let dist_actual = dist.integer_sqrt();
+                //search.bounds.set_around(pt, f64::from(search.nearest_dist).sqrt().floor() as i32);
+                search.bounds.set_around(pt, dist_actual);
+
+                // candidates.clear();
+                // candidates.push(point.clone());
             }
         }
 
@@ -222,7 +208,7 @@ impl OctreeLeafy {
             match at {
                 OctreeLeafy::Node { .. } => {
                     // Descend
-                    at = at.child_for_shared(color).unwrap();
+                    at = at.child_for(color).unwrap();
                 }
                 OctreeLeafy::Leaf { points, .. } => {
                     // No more to do
@@ -232,42 +218,16 @@ impl OctreeLeafy {
         }
 
     }
-
-    pub fn add_calculated(&mut self, bucket: LeafBucketWrapper, point: Point, spare_vectors: &mut Vec<Vec<Point>>) {
-        // Add to the hash
-        let space = point.space();
-        let mut lock = bucket.write();
-        let entry = lock.entry(space);
-        let points = entry.or_insert_with_key(|_| spare_vectors.pop().unwrap_or_default());
-        points.push(point);
-    }
-
-    pub fn remove_calculated(&mut self, bucket: LeafBucketWrapper, point: Point, spare_vectors: &mut Vec<Vec<Point>>) {
-        // Remove from the hash
-        let space = point.space();
-        let mut lock = bucket.write();
-        let entry = lock.entry(space);
-
-        // Remove this point
-        entry.and_modify(|points| {
-            points.retain(|p| p != &point);
-        });
-
-        // If we ended up empty, recycle!
-        if lock.get(&space).unwrap().is_empty() {
-            spare_vectors.push(lock.remove(&space).unwrap());
-        }
-    }
 }
 
 impl NnSearch3d for OctreeLeafy {
-    fn has(&self, pt: SpacePoint) -> bool {
+    fn has(&self, pt: &SpacePoint) -> bool {
         match self {
             OctreeLeafy::Node { children, .. } => {
                 children.iter().any(|child| child.has(pt))
             }
             OctreeLeafy::Leaf { points, .. } => {
-                points.read().contains_key(&pt)
+                points.read().iter().any(|p| p.space() == pt)
             }
         }
     }
@@ -276,12 +236,12 @@ impl NnSearch3d for OctreeLeafy {
         match self {
             OctreeLeafy::Node { .. } => {
                 // Go to child by color
-                self.child_for_shared(&pt.color()).unwrap().has_point(pt)
+                self.child_for(&pt.color()).unwrap().has_point(pt)
             }
             OctreeLeafy::Leaf { points, .. } => {
-                points.read().get(&pt.space())
-                    .map(|points| points.contains(pt))
-                    .unwrap_or(false)
+                points.read()
+                    .iter()
+                    .any(|p| p == pt)
             }
         }
     }
@@ -299,22 +259,16 @@ impl NnSearch3d for OctreeLeafy {
                 // Materialize that we added a point
                 total_points.fetch_add(1, Ordering::Relaxed); // XXX
                 // Add to child by color
-                let child = self.child_for_shared(&point.color()).unwrap();
+                let child = self.child_for(&point.color()).unwrap();
                 child.add(point, spare_vectors);
             }
             OctreeLeafy::Leaf { points, total_points, .. } => {
-                let space = point.space();
                 let mut lock = points.write();
-                let entry = lock.entry(space);
-                let points = entry.or_insert_with_key(|_| spare_vectors.pop().unwrap_or_default());
-                points.push(point);
+                // TODO check we don't already have it? we shouldn't
+                lock.push(point);
                 total_points.fetch_add(1, Ordering::Relaxed); // XXX
             }
         }
-    }
-
-    fn add_sync(&mut self, point: Point, spare_vectors: &mut Vec<Vec<Point>>) {
-        unimplemented!();
     }
 
     fn remove(&self, point: Point, spare_vectors: &mut Vec<Vec<Point>>) {
@@ -323,36 +277,23 @@ impl NnSearch3d for OctreeLeafy {
                 // Materialize that we removed a point
                 total_points.fetch_sub(1, Ordering::Relaxed); // XXX
                 // Remove from child by color
-                let child = self.child_for_shared(&point.color()).unwrap();
+                let child = self.child_for(&point.color()).unwrap();
                 child.remove(point, spare_vectors);
             }
             OctreeLeafy::Leaf { points, total_points, .. } => {
-                let space = point.space();
-                if let Some(points) = points.write().get_mut(&space) {
-                    let before = points.len();
-                    points.retain(|p| p != &point);
-                    total_points.fetch_add(points.len() - before, Ordering::Relaxed); // XXX
-                } else {
-                    println!("A friendly warning that we tried to remove {point} but it didn't exist")
-                }
-
-                // Remove from the hash if we're empty?
-                if points.read()[&space].is_empty() {
-                    let pt = points.write().remove(&space);
-                    pt.map(|pt| spare_vectors.push(pt));
-                }
+                
+                let before = points.read().len();
+                points.write().retain(|p| p != &point);
+                total_points.fetch_sub(before - points.read().len(), Ordering::Relaxed); // XXX
+                
             }
         }
-    }
-
-    fn remove_sync(&mut self, point: Point, spare_vectors: &mut Vec<Vec<Point>>) {
-        unimplemented!();
     }
 
     fn find_nearest(&self, color: &ColorPoint) -> Option<Point> {
         // Start with the smallest node around our target that contains any point
         let mut at = self;
-        while let Some(next) = at.child_for_shared(color) {
+        while let Some(next) = at.child_for(color) {
             // Nothing at or below us, so we're done
             if next.is_empty() {
                 break;
@@ -393,18 +334,18 @@ impl NnSearch3d for OctreeLeafy {
 
 #[test]
 fn test_octree_leafy_add_remove() {
-    let mut tree = OctreeLeafy::init_tree(3);
+    let tree = OctreeLeafy::init_tree(3);
     let mut spare_vectors = Vec::new();
     assert!(tree.is_empty());
 
-    let point = Point::new(&SpacePoint::new(0, 0), &ColorPoint::new(0, 0, 0));
-    tree.add_sync(point.clone(), &mut spare_vectors);
+    let point = Point::new(SpacePoint::new(0, 0), ColorPoint::new(0, 0, 0));
+    tree.add(point.clone(), &mut spare_vectors);
     assert!(!tree.is_empty());
 
     assert!(tree.has_point(&point));
     assert!(tree.has(point.space()));
 
-    tree.remove_sync(point.clone(), &mut spare_vectors);
+    tree.remove(point.clone(), &mut spare_vectors);
     assert!(tree.is_empty());
 
     assert!(!tree.has_point(&point));
@@ -431,7 +372,7 @@ fn test_octree_init_bounds() {
     ];
     
     for color in colors_to_check.iter() {
-        let child = tree.child_for_shared(color);
+        let child = tree.child_for(color);
         let Some(OctreeLeafy::Node { bounds, .. }) = child
             else { panic!("Child should be node") };
         
@@ -441,11 +382,11 @@ fn test_octree_init_bounds() {
 
 #[test]
 fn test_octree_find_nearest_single() {
-    let mut tree = OctreeLeafy::init_tree(2);
+    let tree = OctreeLeafy::init_tree(2);
     let mut spare_vectors = Vec::new();
     
-    let point = Point::new(&SpacePoint::new(0, 0), &ColorPoint::new(0, 0, 0));
-    tree.add_sync(point.clone(), &mut spare_vectors);
+    let point = Point::new(SpacePoint::new(0, 0), ColorPoint::new(0, 0, 0));
+    tree.add(point.clone(), &mut spare_vectors);
 
     let colors_to_check = [
         ColorPoint::new(0, 0, 0),
@@ -468,7 +409,7 @@ fn test_octree_find_nearest_single() {
 #[test]
 fn test_octree_find_nearest_multi() {
     // Have a tree with several points in it and try NN search
-    let mut tree = OctreeLeafy::init_tree(4);
+    let tree = OctreeLeafy::init_tree(4);
     let mut spare_vectors = Vec::new();
 
     let placed_points = [
@@ -494,8 +435,8 @@ fn test_octree_find_nearest_multi() {
 
     for pt in placed_points {
         // Just use 0, 0 for space
-        let point = Point::new(&SpacePoint::new(0, 0), &pt);
-        tree.add_sync(point, &mut spare_vectors);
+        let point = Point::new(SpacePoint::new(0, 0), pt);
+        tree.add(point, &mut spare_vectors);
     }
 
     let search_points = [
@@ -529,7 +470,7 @@ fn test_octree_find_nearest_multi() {
 
         assert!(nearest.is_some(), "Nearest should be found for color {:?}", search_color);
 
-        let nearest_color = nearest.unwrap().color();
+        let nearest_color = *nearest.unwrap().color();
 
         assert_eq!(
             nearest_color,
@@ -541,33 +482,3 @@ fn test_octree_find_nearest_multi() {
         );
     }
 }
-
-// #[test]
-// fn test_octree_search_performance() {
-//     use rand::Rng;
-
-//     // Have a tree with several thousand points in it and do many searches to check performance
-//     let mut tree = OctreeLeafy::init_tree(7);
-
-//     let mut rng = rand::thread_rng();
-
-//     for i in 0..2000 {
-//         let point = Point::new(
-//             &SpacePoint::new(i, i), 
-//             &ColorPoint::new(rng.gen_range(0..=255), rng.gen_range(0..=255), rng.gen_range(0..=255))
-//         );
-//         tree.add_sync(point);
-//     }
-
-//     // Search random points
-//     // Optimization hack to actually do the work
-//     let mut junk = 0;
-//     for _ in 0..10_000 {
-//         let search_color = ColorPoint::new(rng.gen_range(0..=255), rng.gen_range(0..=255), rng.gen_range(0..=255));
-//         let nearest = tree.find_nearest(&search_color);
-//         assert!(nearest.is_some(), "Nearest should be found for color {:?}", search_color);
-//         junk += nearest.unwrap().color().r as u64;
-//     }
-//     println!("Junk: {}", junk);
-//     panic!()
-// }

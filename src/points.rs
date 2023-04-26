@@ -109,30 +109,25 @@ impl fmt::Display for ColorPoint {
 }
 
 #[derive(Clone, Copy, Hash, Eq, PartialEq, PartialOrd, Ord)]
-pub struct Point(u64);
+pub struct Point {
+    space: SpacePoint,
+    color: ColorPoint,
+}
 
 impl Point {
-    pub fn new(space: &SpacePoint, color: &ColorPoint) -> Point {
-        Point(
-            (color.b as u64) << 48 |
-            (color.g as u64) << 40 |
-            (color.r as u64) << 32 |
-            space.0 as u64
-        )
+    pub fn new(space: SpacePoint, color: ColorPoint) -> Point {
+        Point {
+            space,
+            color,
+        }
     }
 
-    #[inline(never)]
-    pub fn space(&self) -> SpacePoint {
-        SpacePoint((self.0 & 0xffffffff) as u32)
+    pub fn space(&self) -> &SpacePoint {
+        &self.space
     }
 
-    #[inline(never)]
-    pub fn color(&self) -> ColorPoint {
-        let r = ((self.0 >> 32) & 0xff) as u8;
-        let g = ((self.0 >> 40) & 0xff) as u8;
-        let b = ((self.0 >> 48) & 0xff) as u8;
-
-        ColorPoint::new(r, g, b)
+    pub fn color(&self) -> &ColorPoint {
+        &self.color
     }
 }
 

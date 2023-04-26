@@ -45,7 +45,7 @@ impl ColorGenerator {
       writing_spaces: make_boxed_bit_array(),
       written_spaces: make_boxed_bit_array(),
       //root: Octree::new(None, 0, 0, BoundingBox::new(0, 0, 0, 255, 255, 255)),
-      root: OctreeLeafy::init_tree(3).into(),
+      root: OctreeLeafy::init_tree(4).into(),
       space_mapping: HashMap::new(),
     }
   }
@@ -86,7 +86,7 @@ impl ColorGenerator {
         // Already occupied
         continue;
       } else {
-        let new_point = Point::new(&neighbor, color);
+        let new_point = Point::new(*neighbor, *color);
 
         self.space_mapping.entry(neighbor.clone()).or_insert(Vec::new()).push(color.clone());
         println!("Adding {new_point} (seed)");
@@ -121,7 +121,6 @@ impl ColorGenerator {
     let mut collision_misses_src: usize = 0;
 
     let wall_start_time = Instant::now();
-
 
     // Search threads
     let num_search_threads = 4;
@@ -251,8 +250,8 @@ impl ColorGenerator {
 
             // Diagnostics printing
             if self.current_color_idx & 262143 == 0 {
-              // Progress
               let i = self.current_color_idx;
+              // Progress
               let time_so_far = wall_start_time.elapsed().as_micros();
               let time_per_px = time_so_far as f64 / i as f64;
               let remaining = time_per_px * (4096 * 4096 - i) as f64;
@@ -269,8 +268,32 @@ impl ColorGenerator {
                 remaining / 1000.0 / 1000.0,
                 (remaining + time_so_far as f64) / 1000.0 / 1000.0,
                 1000.0 / time_per_px,
-                
               );
+
+              // A horrible idea
+              let mut scanned_leaves = 0;
+              let mut min_leaf_entries = 0;
+              let mut max_leaf_entries = 0;
+              let mut total_leaf_entries = 0;
+
+              // Statistics on how saturated the leaves are
+              // let mut q = Vec::new();
+              // q.push(self.root.as_ref());
+
+              // while let Some(next) = q.pop() {
+              //   match next {
+              //     OctreeLeafy::Node { children, .. } => q.extend_from_slice(children.iter().map(Box::as_ref).collect::<Vec<_>>().as_slice()),
+              //     OctreeLeafy::Leaf { points, .. } => {
+              //       scanned_leaves += 1;
+              //       let len = points.read().len();
+              //       min_leaf_entries = min_leaf_entries.min(len);
+              //       max_leaf_entries = max_leaf_entries.max(len);
+              //       total_leaf_entries += len;
+              //     }
+              //   }
+              // }
+
+              // println!("  Scanned {} leaves, min={}, max={}, avg={}", scanned_leaves, min_leaf_entries, max_leaf_entries, total_leaf_entries / scanned_leaves);
             }
 
             c
@@ -328,7 +351,7 @@ impl ColorGenerator {
         // Dispatch the result to a mutation thread
         // TODO should we batch these up?
         let to_remove = self.space_mapping.remove(&result.space()).expect("Should have a found point in our global mapping");
-        let removals = to_remove.iter().map(|color| Point::new(&result.space(), color)).collect();
+        let removals = to_remove.iter().map(|color| Point::new(*result.space(), *color)).collect();
 
         let mut additions = vec![];
         result.space().get_neighbors(&mut additions);
@@ -338,12 +361,12 @@ impl ColorGenerator {
         let additions: Vec<_> = additions
           .iter()
           .filter(|space| !self.writing_spaces.view_bits::<Msb0>()[space.0 as usize])
-          .map(|space| Point::new(space, &color))
+          .map(|space| Point::new(*space, color))
           .collect();
 
         // Keep track in our space->color map
         for addition in &additions {
-          self.space_mapping.entry(addition.space()).or_insert(Vec::new()).push(addition.color());
+          self.space_mapping.entry(*addition.space()).or_insert(Vec::new()).push(*addition.color());
         }
 
         for r in &removals { trace!("    Removing {r} because we found {result}"); }

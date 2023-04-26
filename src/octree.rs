@@ -81,7 +81,7 @@ impl Octree {
     //println!("    Removed {point} at {}", self.depth);
     if self.depth > 0 { // NB we already removed it from the root...
       // Note: this is very fine because we might have already removed this space point
-      self.points.remove(point.space());
+      self.points.remove(*point.space());
     }
 
     // Remove from appropriate child
@@ -250,8 +250,8 @@ impl NnSearch3d for Octree {
     self.points.is_empty()
   }
 
-  fn has(&self, pt: SpacePoint) -> bool {
-    self.points.contains_key(pt)
+  fn has(&self, pt: &SpacePoint) -> bool {
+    self.points.contains_key(*pt)
   }
 
   fn has_point(&self, pt: &Point) -> bool {
@@ -275,7 +275,7 @@ impl NnSearch3d for Octree {
 
     // Add the point here
     self.points.get_or_insert(
-      point.space(),
+      *point.space(),
       // Grab us some space if we didn't have this list yet
       #[inline(never)]
       || {
@@ -292,11 +292,7 @@ impl NnSearch3d for Octree {
     
   }
 
-  fn add_sync(&mut self, point: Point, spare_vectors: &mut Vec<Vec<Point>>) {
-    self.add(point, spare_vectors);
-  }
-
-  fn remove(&self, point: Point, spare_vectors: &mut Vec<Vec<Point>>) {
+  fn remove(&self, point: Point, _spare_vectors: &mut Vec<Vec<Point>>) {
     if !self.has_point(&point) {
       panic!("Removing non-existent point {point}");
     }
@@ -305,7 +301,7 @@ impl NnSearch3d for Octree {
 
     // NB we are removing by the spatial component here, so get all the actual points with this
     // Grab all our Rcs to remove
-    let pts_maybe = self.points.remove(point.space());
+    let pts_maybe = self.points.remove(*point.space());
 
     //println!("    Removing {} instances of color {}", pts.borrow().len(), &point.color);
     if let Some(pts) = pts_maybe {
@@ -321,10 +317,6 @@ impl NnSearch3d for Octree {
     //assert!(!self.points.contains_key(point), "Tried to remove a point but still present");
 
     //pts_maybe
-  }
-
-  fn remove_sync(&mut self, point: Point, spare_vectors: &mut Vec<Vec<Point>>) {
-    self.remove(point, spare_vectors);
   }
 
   fn find_nearest(&self, color: &ColorPoint) -> Option<Point> {

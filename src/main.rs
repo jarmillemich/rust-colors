@@ -1,12 +1,9 @@
-use std::{time::Instant, mem, sync::{atomic::AtomicU8, Arc, RwLock}};
-
-use rust_colors::{color_generator::ColorGenerator};
+use std::time::Instant;
+use rust_colors::color_generator::ColorGenerator;
 
 
 fn main() {
     let start = Instant::now();
-
-    println!("{}", mem::size_of::<AtomicU8>());
     
     println!("Starting");
 
@@ -45,17 +42,17 @@ fn test_octree_search_performance() {
     use rust_colors::{octree_leafy::OctreeLeafy, nn_search_3d::NnSearch3d, points::{ColorPoint, Point, SpacePoint}};
 
     // Have a tree with several thousand points in it and do many searches to check performance
-    let mut tree = OctreeLeafy::init_tree(3);
+    let tree = OctreeLeafy::init_tree(3);
     let mut spare_vectors = Vec::new();
 
     let mut rng = rand::thread_rng();
 
     for i in 0..2000 {
         let point = Point::new(
-            &SpacePoint::new(i, i), 
-            &ColorPoint::new(rng.gen_range(0..=255), rng.gen_range(0..=255), rng.gen_range(0..=255))
+            SpacePoint::new(i, i), 
+            ColorPoint::new(rng.gen_range(0..=255), rng.gen_range(0..=255), rng.gen_range(0..=255))
         );
-        tree.add_sync(point, &mut spare_vectors);
+        tree.add(point, &mut spare_vectors);
     }
 
     // Search random points
@@ -76,7 +73,7 @@ fn test_octree_add_remove_performance() {
     use rust_colors::{octree_leafy::OctreeLeafy, nn_search_3d::NnSearch3d, points::{ColorPoint, Point, SpacePoint}};
 
     // Have a tree with several thousand points in it and do many searches to check performance
-    let mut tree = OctreeLeafy::init_tree(3);
+    let tree = OctreeLeafy::init_tree(3);
     let mut spare_vectors = Vec::new();
 
     let mut rng = rand::thread_rng();
@@ -85,11 +82,11 @@ fn test_octree_add_remove_performance() {
     // Add some to start
     for i in 0..2000 {
         let point = Point::new(
-            &SpacePoint::new(i, i), 
-            &ColorPoint::new(rng.gen_range(0..=255), rng.gen_range(0..=255), rng.gen_range(0..=255))
+            SpacePoint::new(i, i), 
+            ColorPoint::new(rng.gen_range(0..=255), rng.gen_range(0..=255), rng.gen_range(0..=255))
         );
         points.push(point.clone());
-        tree.add_sync(point, &mut spare_vectors);
+        tree.add(point, &mut spare_vectors);
     }
 
     // Our vector pool
@@ -105,16 +102,16 @@ fn test_octree_add_remove_performance() {
         let point = points.pop().unwrap();
 
         //tree.remove_sync(point);
-        tree.remove_calculated(tree.precalc_path(point), point, &mut spare_vectors);
+        tree.remove(point, &mut spare_vectors);
 
         // Add another back
         let point = Point::new(
-            &SpacePoint::new(rng.gen_range(0..=4095), rng.gen_range(0..=4095)), 
-            &ColorPoint::new(rng.gen_range(0..=255), rng.gen_range(0..=255), rng.gen_range(0..=255))
+            SpacePoint::new(rng.gen_range(0..=4095), rng.gen_range(0..=4095)), 
+            ColorPoint::new(rng.gen_range(0..=255), rng.gen_range(0..=255), rng.gen_range(0..=255))
         );
         points.push(point.clone());
         //tree.add_sync(point);
-        tree.add_calculated(tree.precalc_path(point), point, &mut spare_vectors);
+        tree.add(point, &mut spare_vectors);
 
         junk += tree.len() as u64;
     }

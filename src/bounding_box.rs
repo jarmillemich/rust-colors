@@ -31,12 +31,14 @@ impl BoundingBox {
         other.ub <= self.ub && other.lb >= self.lb
     }
 
+    #[inline(never)]
     pub fn contains_color(&self, color: &ColorPoint) -> bool {
         i32::from(color.r) >= self.lr && i32::from(color.r) <= self.ur &&
         i32::from(color.g) >= self.lg && i32::from(color.g) <= self.ug &&
         i32::from(color.b) >= self.lb && i32::from(color.b) <= self.ub
     }
 
+    #[inline(never)]
     pub fn set_around(&mut self, center: &ColorPoint, radius: i32) {
         assert!(radius > 0, "Tried to set_around with a non-positive radius {radius}");
         
